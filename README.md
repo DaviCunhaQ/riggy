@@ -1,6 +1,6 @@
 # Instalar as bibliotecas
 
-pip install customtkinter matplotlib pygame
+pip install customtkinter matplotlib pygame PyInstaller
 
 # Gerar Executável
 
