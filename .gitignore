@@ -1,0 +1,20 @@
+# Arquivos e pastas criados pelo PyInstaller
+/build/
+/dist/
+__pycache__/
+*.spec
+
+# Arquivos temporários
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Configurações do sistema e editores
+*.DS_Store
+*.vscode/
+*.idea/
+
+# Arquivos do Windows
+Thumbs.db
+desktop.ini
