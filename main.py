@@ -15,7 +15,7 @@ PORTA_UDP = 5000
 TIMEOUT = 0.02
 LP_ALPHA = 0.9
 TILT_THRESHOLD = 80.0
-VIB_THRESHOLD = 1.5  # alerta se vibração for maior que isso
+VIB_THRESHOLD = 1.5
 WINDOW_SIZE = 20
 
 # === ÁUDIO ===
