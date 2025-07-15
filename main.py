@@ -244,6 +244,20 @@ def update_graph():
 btn_frame = ctk.CTkFrame(frame, fg_color='transparent')
 btn_frame.pack(pady=(10, 0))
 
+# CAMPOS DE ENTRADA DE LIMITES
+entry_frame = ctk.CTkFrame(app)
+entry_frame.pack(pady=10)
+
+ctk.CTkLabel(entry_frame, text="Limite de inclinação:", font=('Segoe UI', 12)).grid(row=0, column=0, padx=5)
+entry_tilt_limit = ctk.CTkEntry(entry_frame, width=60)
+entry_tilt_limit.insert(0, "80.0")
+entry_tilt_limit.grid(row=0, column=1, padx=5)
+
+ctk.CTkLabel(entry_frame, text="Limite de vibração:", font=('Segoe UI', 12)).grid(row=0, column=2, padx=5)
+entry_vib_limit = ctk.CTkEntry(entry_frame, width=60)
+entry_vib_limit.insert(0, "1.5")
+entry_vib_limit.grid(row=0, column=3, padx=5)
+
 btn_start = ctk.CTkButton(
     btn_frame, text='Iniciar',
     fg_color=COR_LARANJA, hover_color='#FFB266',
@@ -262,6 +276,30 @@ btn_report = ctk.CTkButton(
 )
 btn_report.grid(row=0, column=1, padx=10, pady=10)
 
+def start_recepcao():
+    global running, thread, TILT_THRESHOLD, VIB_THRESHOLD
+
+    reset_dados()
+
+    # LER LIMITES DIGITADOS
+    try:
+        TILT_THRESHOLD = float(entry_tilt_limit.get())
+    except:
+        TILT_THRESHOLD = 80.0  # valor padrão
+
+    try:
+        VIB_THRESHOLD = float(entry_vib_limit.get())
+    except:
+        VIB_THRESHOLD = 1.5  # valor padrão
+
+    running = True
+    status_label.configure(text='Recebendo...', text_color=COR_LARANJA)
+    btn_start.configure(text='Encerrar', command=stop_recepcao)
+    btn_report.configure(state='disabled')
+    thread = threading.Thread(target=servidor_udp, daemon=True)
+    thread.start()
+    update_graph()
+
 def reset_dados():
     global tempo, tilts, vibracoes, alerts, t, gravity, tilt_alerted, vib_alerted, tilts_all, vibracoes_all
     tempo = []
@@ -274,17 +312,6 @@ def reset_dados():
     vib_alerted = False
     tilts_all = []  # <- resetar histórico
     vibracoes_all = []  # <- resetar histórico
-
-def start_recepcao():
-    global running, thread
-    reset_dados()
-    running = True
-    status_label.configure(text='Recebendo...', text_color=COR_LARANJA)
-    btn_start.configure(text='Encerrar', command=stop_recepcao)
-    btn_report.configure(state='disabled')
-    thread = threading.Thread(target=servidor_udp, daemon=True)
-    thread.start()
-    update_graph()
 
 def stop_recepcao():
     global running
