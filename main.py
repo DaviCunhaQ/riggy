@@ -63,6 +63,13 @@ def gerar_relatorio():
     c = pdf_canvas.Canvas(filename, pagesize=A4)
     width, height = A4
     y = height - 50
+    # Adiciona o logo no topo do PDF, agora alinhado à esquerda
+    logo_path = os.path.join(os.path.dirname(__file__), 'riggy-logo.jpeg')
+    if os.path.isfile(logo_path):
+        logo_width = 80
+        logo_height = 80
+        c.drawImage(logo_path, 40, height - logo_height - 20, width=logo_width, height=logo_height, mask='auto')
+        y = height - logo_height - 40
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, y, "Relatório - Riggy")
     y -= 30
@@ -201,6 +208,13 @@ app = ctk.CTk()
 app.title('Riggy - UDP SensaGram')
 app.geometry('900x700')
 app.configure(bg=COR_PRETO)
+# Define o ícone da janela, se disponível
+ico_path = os.path.join(os.path.dirname(__file__), 'riggy-logo.ico')
+if os.path.isfile(ico_path):
+    try:
+        app.iconbitmap(ico_path)
+    except Exception:
+        pass
 
 # Função para obter o IP local preferencialmente do Wi-Fi
 import sys
