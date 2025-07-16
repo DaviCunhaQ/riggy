@@ -12,6 +12,8 @@ import math
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas as pdf_canvas
 import statistics
+import subprocess
+import re
 
 # === CONFIGURAÇÕES ===
 PORTA_UDP = 5000
@@ -237,6 +239,19 @@ def get_local_ip():
     except Exception:
         return '127.0.0.1'
 
+def get_wifi_ssid():
+    if os.name == 'nt':  # Windows
+        try:
+            output = subprocess.check_output(['netsh', 'wlan', 'show', 'interfaces'], encoding='utf-8', errors='ignore')
+            for line in output.split('\n'):
+                if 'SSID' in line and 'BSSID' not in line:
+                    ssid = line.split(':', 1)[1].strip()
+                    if ssid and ssid.lower() != 'ssid':
+                        return ssid
+        except Exception:
+            pass
+    return 'N/A'
+
 # ===== NOVO LAYOUT PRINCIPAL =====
 # Frame do título
 frame_titulo = ctk.CTkFrame(app, fg_color='transparent')
@@ -244,9 +259,10 @@ frame_titulo.pack(fill='x', pady=(10, 0))
 label_titulo = ctk.CTkLabel(frame_titulo, text='Riggy', font=('Segoe UI', 24, 'bold'), text_color=COR_LARANJA)
 label_titulo.pack(anchor='center')
 
-# Adiciona o label de IP e porta logo abaixo do título
+# Adiciona o label de IP, porta e Wi-Fi logo abaixo do título
 local_ip = get_local_ip()
-label_ip = ctk.CTkLabel(frame_titulo, text=f'ip: {local_ip}  port: {PORTA_UDP}', font=('Segoe UI', 14), text_color=COR_TEXTO)
+wifi_ssid = get_wifi_ssid()
+label_ip = ctk.CTkLabel(frame_titulo, text=f'ip: {local_ip}  port: {PORTA_UDP}  wifi: {wifi_ssid}', font=('Segoe UI', 14), text_color=COR_TEXTO)
 label_ip.pack(anchor='center', pady=(2, 0))
 
 # Frame principal dividido (esquerda/direita)
