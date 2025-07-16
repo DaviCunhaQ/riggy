@@ -202,12 +202,38 @@ app.title('Riggy - UDP SensaGram')
 app.geometry('900x700')
 app.configure(bg=COR_PRETO)
 
+# Função para obter o IP local preferencialmente do Wi-Fi
+import sys
+import platform
+
+def get_local_ip():
+    try:
+        # Método universal: conecta a um IP externo e pega o IP local usado
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        try:
+            # Não precisa estar online, só resolve a interface local
+            s.connect(('8.8.8.8', 80))
+            ip = s.getsockname()[0]
+        except Exception:
+            ip = '127.0.0.1'
+        finally:
+            s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
 # ===== NOVO LAYOUT PRINCIPAL =====
 # Frame do título
 frame_titulo = ctk.CTkFrame(app, fg_color='transparent')
 frame_titulo.pack(fill='x', pady=(10, 0))
 label_titulo = ctk.CTkLabel(frame_titulo, text='Riggy', font=('Segoe UI', 24, 'bold'), text_color=COR_LARANJA)
 label_titulo.pack(anchor='center')
+
+# Adiciona o label de IP e porta logo abaixo do título
+local_ip = get_local_ip()
+label_ip = ctk.CTkLabel(frame_titulo, text=f'ip: {local_ip}  port: {PORTA_UDP}', font=('Segoe UI', 14), text_color=COR_TEXTO)
+label_ip.pack(anchor='center', pady=(2, 0))
 
 # Frame principal dividido (esquerda/direita)
 frame_principal = ctk.CTkFrame(app, fg_color='transparent')
@@ -252,7 +278,7 @@ checkbox_vib = ctk.CTkCheckBox(
 checkbox_vib.pack(side='left', padx=10, pady=5)
 # ===== FIM ABA SUPERIOR =====
 
-status_label = ctk.CTkLabel(frame_esquerdo, text='Pronto', font=('Segoe UI', 16, 'bold'), text_color=COR_LARANJA)
+status_label = ctk.CTkLabel(frame_esquerdo, text='Pronto para iniciar', font=('Segoe UI', 16, 'bold'), text_color=COR_LARANJA)
 status_label.pack(pady=(10, 20))
 
 # Subplots dinâmicos
