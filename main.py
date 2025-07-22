@@ -333,50 +333,57 @@ def update_graph():
     # Limpa todos os eixos
     for ax in axs:
         ax.clear()
-    # Determina quais gráficos mostrar
+        ax.set_visible(False)  # Oculta todos inicialmente
+
     show_tilt = grafico_tilt_var.get()
     show_vib = grafico_vib_var.get()
-    n = show_tilt + show_vib
-    if n == 0:
+
+    if not show_tilt and not show_vib:
         canvas.draw()
         if running:
             app.after(50, update_graph)
         return
-    # Ajusta subplots dinamicamente
-    if n == 2:
-        idx_tilt, idx_vib = 0, 1
-    elif show_tilt:
-        idx_tilt, idx_vib = 0, None
-    elif show_vib:
-        idx_tilt, idx_vib = None, 0
-    # Inclinação
-    if show_tilt:
-        ax = axs[idx_tilt]
+
+    if show_tilt and show_vib:
+        # Dois gráficos: tilt em axs[0], vib em axs[1]
+        axs[0].set_visible(True)
+        axs[1].set_visible(True)
         if tilts:
             pts = list(range(len(tilts)))
-            ax.plot(pts, list(tilts), color=COR_LARANJA, linewidth=2)
-        ax.set_ylim(0, 100)
-        ax.set_title('Inclinação (°)', color=COR_LARANJA, fontsize=12, fontweight='bold')
-        ax.set_ylabel('Grau', color=COR_TEXTO)
-        ax.set_facecolor(COR_CINZA)
-    if show_vib:
-        ax = axs[idx_vib]
+            axs[0].plot(pts, list(tilts), color=COR_LARANJA, linewidth=2)
+        axs[0].set_ylim(0, 100)
+        axs[0].set_title('Inclinação (°)', color=COR_LARANJA, fontsize=12, fontweight='bold')
+        axs[0].set_ylabel('Grau', color=COR_TEXTO)
+        axs[0].set_facecolor(COR_CINZA)
+
         if vibracoes:
             pts = list(range(len(vibracoes)))
-            ax.plot(pts, list(vibracoes), color='#FFB266', linewidth=2)
-        ax.set_ylim(0, 5)
-        ax.set_title('Vibração (g)', color=COR_LARANJA, fontsize=12, fontweight='bold')
-        ax.set_ylabel('g', color=COR_TEXTO)
-        ax.set_facecolor(COR_CINZA)
-    # Oculta eixos não usados
-    if not show_tilt:
-        axs[0].set_visible(False)
-    else:
+            axs[1].plot(pts, list(vibracoes), color='#FFB266', linewidth=2)
+        axs[1].set_ylim(0, 5)
+        axs[1].set_title('Vibração (g)', color=COR_LARANJA, fontsize=12, fontweight='bold')
+        axs[1].set_ylabel('g', color=COR_TEXTO)
+        axs[1].set_facecolor(COR_CINZA)
+
+    elif show_tilt:
         axs[0].set_visible(True)
-    if not show_vib:
-        axs[1].set_visible(False)
-    else:
-        axs[1].set_visible(True)
+        if tilts:
+            pts = list(range(len(tilts)))
+            axs[0].plot(pts, list(tilts), color=COR_LARANJA, linewidth=2)
+        axs[0].set_ylim(0, 100)
+        axs[0].set_title('Inclinação (°)', color=COR_LARANJA, fontsize=12, fontweight='bold')
+        axs[0].set_ylabel('Grau', color=COR_TEXTO)
+        axs[0].set_facecolor(COR_CINZA)
+
+    elif show_vib:
+        axs[0].set_visible(True)
+        if vibracoes:
+            pts = list(range(len(vibracoes)))
+            axs[0].plot(pts, list(vibracoes), color='#FFB266', linewidth=2)
+        axs[0].set_ylim(0, 5)
+        axs[0].set_title('Vibração (g)', color=COR_LARANJA, fontsize=12, fontweight='bold')
+        axs[0].set_ylabel('g', color=COR_TEXTO)
+        axs[0].set_facecolor(COR_CINZA)
+
     fig.tight_layout(pad=3.0)
     canvas.draw()
     if running:

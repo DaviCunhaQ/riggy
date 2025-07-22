@@ -11,6 +11,8 @@ __pycache__/
 *.log
 *.txt
 *.pdf
+*.mp4
+*.gif
 
 # Configurações do sistema e editores
 *.DS_Store
