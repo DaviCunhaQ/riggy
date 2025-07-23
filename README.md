@@ -1,6 +1,6 @@
 # Instalar as bibliotecas
 
-pip install customtkinter matplotlib pygame PyInstaller
+pip install customtkinter matplotlib pygame opencv-python numpy PyMuPDF
 
 # Gerar Executável
 

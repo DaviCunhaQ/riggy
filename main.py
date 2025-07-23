@@ -11,11 +11,8 @@ from collections import deque
 import math
 import statistics
 import subprocess
-import re
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
-import io
 import fitz  # PyMuPDF
 
 # === CONFIGURAÇÕES ===
