@@ -9,11 +9,14 @@ from datetime import datetime
 import os
 from collections import deque
 import math
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas as pdf_canvas
 import statistics
 import subprocess
 import re
+import cv2
+import numpy as np
+from PIL import Image, ImageTk
+import io
+import fitz  # PyMuPDF
 
 # === CONFIGURAÇÕES ===
 PORTA_UDP = 5000
@@ -22,6 +25,8 @@ LP_ALPHA = 0.9
 TILT_THRESHOLD = 80.0
 VIB_THRESHOLD = 1.5
 WINDOW_SIZE = 20
+gravacao_inicio = None
+gravacao_fim = None
 
 # === ÁUDIO ===
 pygame.mixer.init()
@@ -33,24 +38,119 @@ def tocar_alerta(nome_arquivo):
 # === VARIÁVEIS GLOBAIS ===
 running = False
 thread = None
+recording = False
+video_writer = None
+video_filename = None
+frames_buffer = []
 
 tempo = []
 tilts = deque(maxlen=WINDOW_SIZE)
 vibracoes = deque(maxlen=WINDOW_SIZE)
 alerts = []
 
-tilts_all = []  # <- NOVO: todos os valores de inclinação
-vibracoes_all = []  # <- NOVO: todos os valores de vibração
+tilts_all = []
+vibracoes_all = []
 
 tilt_alerted = False
 vib_alerted = False
 t = 0
 gravity = [0.0, 0.0, 9.81]
 
-# === RELATÓRIO ===
-def gerar_relatorio():
+# === GRAVAÇÃO DE VÍDEO ===
+def iniciar_gravacao():
+    global recording, video_writer, video_filename, frames_buffer, gravacao_inicio
+    if recording:
+        return
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"relatorio_{now}.pdf"
+    video_filename = f"gravacao_graficos_{now}.mp4"
+    recording = True
+    frames_buffer = []
+    gravacao_inicio = datetime.now()  # marca o tempo de início
+    print(f"Iniciando gravação: {video_filename}")
+
+def finalizar_gravacao():
+    global recording, video_writer, frames_buffer, gravacao_fim
+    if not recording:
+        return
+    recording = False
+    gravacao_fim = datetime.now()  # marca o tempo de fim
+
+    if len(frames_buffer) == 0:
+        print("Nenhum frame capturado para gravação")
+        return
+    try:
+        duracao_segundos = (gravacao_fim - gravacao_inicio).total_seconds()
+        fps = len(frames_buffer) / duracao_segundos if duracao_segundos > 0 else 10
+
+        print(f"Duração real: {duracao_segundos:.2f}s | FPS calculado: {fps:.2f}")
+
+        height, width, channels = frames_buffer[0].shape
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video_writer = cv2.VideoWriter(video_filename, fourcc, fps, (width, height))
+        for frame in frames_buffer:
+            video_writer.write(frame)
+        video_writer.release()
+        video_writer = None
+        print(f"Gravação finalizada: {video_filename} com {len(frames_buffer)} frames")
+    except Exception as e:
+        print(f"Erro ao finalizar gravação: {e}")
+        if video_writer:
+            video_writer.release()
+
+def capturar_frame_grafico():
+    global frames_buffer
+    if not recording:
+        return
+    
+    try:
+        canvas.draw()
+        canvas.flush_events()
+        
+        # Método atualizado para versões mais recentes do matplotlib
+        buf = canvas.buffer_rgba()
+        buf = np.asarray(buf)
+        buf = buf.reshape(canvas.get_width_height()[::-1] + (4,))
+        
+        # Remove o canal alpha (RGBA -> RGB)
+        frame_rgb = buf[:, :, :3]
+        
+        # Converte RGB para BGR (formato do OpenCV)
+        frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        
+        # Redimensiona para tamanho padrão se necessário
+        frame = cv2.resize(frame, (800, 600))
+        
+        # Adiciona ao buffer
+        frames_buffer.append(frame.copy())
+        
+        # Limita o buffer para evitar uso excessivo de memória
+        if len(frames_buffer) > 1000:
+            frames_buffer.pop(0)
+            
+    except Exception as e:
+        print(f"Erro ao capturar frame: {e}")
+        # Fallback para versões mais antigas do matplotlib
+        try:
+            buf = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
+            buf = buf.reshape(canvas.get_width_height()[::-1] + (3,))
+            frame = cv2.cvtColor(buf, cv2.COLOR_RGB2BGR)
+            frame = cv2.resize(frame, (800, 600))
+            frames_buffer.append(frame.copy())
+            if len(frames_buffer) > 1000:
+                frames_buffer.pop(0)
+        except Exception as e2:
+            print(f"Erro no fallback: {e2}")
+
+# === RELATÓRIO COM VÍDEO ANEXADO USANDO PyMuPDF ===
+def gerar_relatorio():
+    global video_filename, gravacao_inicio, gravacao_fim
+
+    finalizar_gravacao()
+
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pdf_filename = f"relatorio_{now}.pdf"
+
+    # Estatísticas
     tilt_list = [v for v in tilts_all if not math.isnan(v)] if grafico_tilt_var.get() else []
     vib_list = [v for v in vibracoes_all if not math.isnan(v)] if grafico_vib_var.get() else []
     tilt_media = sum(tilt_list) / len(tilt_list) if tilt_list else 0
@@ -62,62 +162,121 @@ def gerar_relatorio():
     tilt_std = statistics.stdev(tilt_list) if len(tilt_list) > 1 else 0
     vib_std = statistics.stdev(vib_list) if len(vib_list) > 1 else 0
 
-    c = pdf_canvas.Canvas(filename, pagesize=A4)
-    width, height = A4
-    y = height - 50
-    # Adiciona o logo no topo do PDF, agora alinhado à esquerda
+    duracao_real = (gravacao_fim - gravacao_inicio).total_seconds() if gravacao_inicio and gravacao_fim else len(frames_buffer)/10
+
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)  # A4
+
+    cor_laranja = (1, 0.5, 0)
+    cor_preta = (0, 0, 0)
+    cor_cinza = (0.3, 0.3, 0.3)
+    cor_cinza_claro = (0.9, 0.9, 0.9)
+
+    y_pos = 800
+    desenhou_estatisticas = False  # <- controle do espaço em branco
+
+    # Cabeçalho
     logo_path = os.path.join(os.path.dirname(__file__), 'riggy-logo.jpeg')
     if os.path.isfile(logo_path):
-        logo_width = 80
-        logo_height = 80
-        c.drawImage(logo_path, 40, height - logo_height - 20, width=logo_width, height=logo_height, mask='auto')
-        y = height - logo_height - 40
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, y, "Relatório - Riggy")
-    y -= 30
-    c.setFont("Helvetica", 12)
-    c.drawString(50, y, f"Data: {datetime.now():%d/%m/%Y %H:%M:%S}")
-    y -= 30
-    c.drawString(50, y, f"Pontos recebidos: {len(tempo)}")
-    y -= 20
-    c.drawString(50, y, f"Alertas de Inclinação: {sum(1 for a in alerts if a[0]=='tilt') if grafico_tilt_var.get() else 0}")
-    y -= 20
-    c.drawString(50, y, f"Alertas de Vibração: {sum(1 for a in alerts if a[0]=='vibração') if grafico_vib_var.get() else 0}")
+        try:
+            logo_rect = fitz.Rect(50, y_pos-60, 110, y_pos)
+            page.insert_image(logo_rect, filename=logo_path)
+        except:
+            pass
+
+    page.insert_text((130, y_pos-20), "RELATÓRIO RIGGY", fontsize=20, color=cor_laranja)
+    page.insert_text((130, y_pos-40), "UDP SensaGram - Monitoramento de Sensores", fontsize=12, color=cor_cinza)
+    page.draw_line(fitz.Point(50, y_pos-70), fitz.Point(545, y_pos-70), color=cor_laranja, width=2)
+    y_pos -= 90
+
+    # Informações gerais
+    info_rect = fitz.Rect(50, y_pos-80, 545, y_pos)
+    page.draw_rect(info_rect, color=cor_cinza_claro, fill=cor_cinza_claro)
+    page.draw_rect(info_rect, color=cor_cinza, width=1)
+    page.insert_text((60, y_pos-15), "INFORMAÇÕES GERAIS", fontsize=12, color=cor_laranja)
+    page.insert_text((60, y_pos-35), f"Data e Hora: {datetime.now():%d/%m/%Y %H:%M:%S}", fontsize=11, color=cor_preta)
+    page.insert_text((60, y_pos-50), f"Pontos Coletados: {len(tempo)}", fontsize=11, color=cor_preta)
+    page.insert_text((300, y_pos-35), f"Alertas de Inclinação: {sum(1 for a in alerts if a[0]=='tilt') if grafico_tilt_var.get() else 0}", fontsize=11, color=cor_preta)
+    page.insert_text((300, y_pos-50), f"Alertas de Vibração: {sum(1 for a in alerts if a[0]=='vibração') if grafico_vib_var.get() else 0}", fontsize=11, color=cor_preta)
+    y_pos -= 100
+
+    # Estatísticas de inclinação
     if grafico_tilt_var.get():
-        y -= 30
-        c.setFont("Helvetica-Bold", 13)
-        c.drawString(50, y, "Inclinação (°):")
-        y -= 20
-        c.setFont("Helvetica", 12)
-        c.drawString(60, y, f"Média: {tilt_media:.2f}")
-        y -= 20
-        c.drawString(60, y, f"Máximo: {tilt_max:.2f}")
-        y -= 20
-        c.drawString(60, y, f"Mínimo: {tilt_min:.2f}")
-        y -= 20
-        c.drawString(60, y, f"Desvio padrão: {tilt_std:.2f}")
+        desenhou_estatisticas = True
+        tilt_rect = fitz.Rect(50, y_pos-120, 545, y_pos)
+        page.draw_rect(tilt_rect, color=cor_cinza_claro, fill=cor_cinza_claro)
+        page.draw_rect(tilt_rect, color=cor_cinza, width=1)
+        page.insert_text((60, y_pos-15), "📐 ESTATÍSTICAS DE INCLINAÇÃO (°)", fontsize=12, color=cor_laranja)
+        page.insert_text((60, y_pos-35), f"Média: {tilt_media:.2f}°", fontsize=11, color=cor_preta)
+        page.insert_text((60, y_pos-50), f"Máximo: {tilt_max:.2f}°", fontsize=11, color=cor_preta)
+        page.insert_text((60, y_pos-65), f"Mínimo: {tilt_min:.2f}°", fontsize=11, color=cor_preta)
+        page.insert_text((300, y_pos-35), f"Desvio Padrão: {tilt_std:.2f}°", fontsize=11, color=cor_preta)
+        page.insert_text((300, y_pos-50), f"Limite Configurado: {TILT_THRESHOLD:.1f}°", fontsize=11, color=cor_preta)
+        status_tilt = "DENTRO DO LIMITE" if tilt_max < TILT_THRESHOLD else "LIMITE ULTRAPASSADO"
+        cor_status = (0, 0.7, 0) if tilt_max < TILT_THRESHOLD else (0.8, 0, 0)
+        page.insert_text((300, y_pos-65), f"Status: {status_tilt}", fontsize=11, color=cor_status)
+        y_pos -= 140
+
+    # Estatísticas de vibração
     if grafico_vib_var.get():
-        y -= 30
-        c.setFont("Helvetica-Bold", 13)
-        c.drawString(50, y, "Vibração (g):")
-        y -= 20
-        c.setFont("Helvetica", 12)
-        c.drawString(60, y, f"Média: {vib_media:.2f}")
-        y -= 20
-        c.drawString(60, y, f"Máximo: {vib_max:.2f}")
-        y -= 20
-        c.drawString(60, y, f"Mínimo: {vib_min:.2f}")
-        y -= 20
-        c.drawString(60, y, f"Desvio padrão: {vib_std:.2f}")
-    y -= 40
-    c.setFont("Helvetica-Oblique", 10)
-    c.drawString(50, y, "Gerado por Riggy - UDP SensaGram")
-    c.save()
+        desenhou_estatisticas = True
+        vib_rect = fitz.Rect(50, y_pos-120, 545, y_pos)
+        page.draw_rect(vib_rect, color=cor_cinza_claro, fill=cor_cinza_claro)
+        page.draw_rect(vib_rect, color=cor_cinza, width=1)
+        page.insert_text((60, y_pos-15), "📳 ESTATÍSTICAS DE VIBRAÇÃO (g)", fontsize=12, color=cor_laranja)
+        page.insert_text((60, y_pos-35), f"Média: {vib_media:.3f}g", fontsize=11, color=cor_preta)
+        page.insert_text((60, y_pos-50), f"Máximo: {vib_max:.3f}g", fontsize=11, color=cor_preta)
+        page.insert_text((60, y_pos-65), f"Mínimo: {vib_min:.3f}g", fontsize=11, color=cor_preta)
+        page.insert_text((300, y_pos-35), f"Desvio Padrão: {vib_std:.3f}g", fontsize=11, color=cor_preta)
+        page.insert_text((300, y_pos-50), f"Limite Configurado: {VIB_THRESHOLD:.1f}g", fontsize=11, color=cor_preta)
+        status_vib = "DENTRO DO LIMITE" if vib_max < VIB_THRESHOLD else "LIMITE ULTRAPASSADO"
+        cor_status = (0, 0.7, 0) if vib_max < VIB_THRESHOLD else (0.8, 0, 0)
+        page.insert_text((300, y_pos-65), f"Status: {status_vib}", fontsize=11, color=cor_status)
+        y_pos -= 140
+
+    # Se nenhuma estatística foi desenhada, corrige o y_pos
+    if not desenhou_estatisticas:
+        y_pos -= 40  # distância abaixo de "Informações Gerais"
+
+    # Seção de vídeo
+    if video_filename and os.path.isfile(video_filename):
+        video_rect = fitz.Rect(50, y_pos-100, 545, y_pos)
+        page.draw_rect(video_rect, color=(0.1, 0.1, 0.1), fill=(0.1, 0.1, 0.1))
+        page.draw_rect(video_rect, color=cor_laranja, width=2)
+        page.insert_text((60, y_pos-15), "🎥 GRAVAÇÃO DOS GRÁFICOS", fontsize=12, color=cor_laranja)
+        page.insert_text((60, y_pos-35), f"Arquivo: {video_filename}", fontsize=11, color=(1, 1, 1))
+        page.insert_text((60, y_pos-50), f"Frames Capturados: {len(frames_buffer)}", fontsize=11, color=(1, 1, 1))
+        page.insert_text((60, y_pos-65), f"Duração Aproximada: {duracao_real:.1f} segundos", fontsize=11, color=(1, 1, 1))
+        try:
+            with open(video_filename, 'rb') as video_file:
+                video_bytes = video_file.read()
+            doc.embfile_add(video_filename, video_bytes, filename=os.path.basename(video_filename))
+            page.insert_text((400, y_pos-35), "📎 VÍDEO ANEXADO", fontsize=12, color=cor_laranja)
+            page.insert_text((400, y_pos-50), "Clique no ícone de anexo", fontsize=10, color=(0.8, 0.8, 0.8))
+            page.insert_text((400, y_pos-65), "no seu leitor de PDF", fontsize=10, color=(0.8, 0.8, 0.8))
+        except Exception as e:
+            print(f"Erro ao anexar vídeo: {e}")
+            page.insert_text((400, y_pos-35), "❌ ERRO NO ANEXO", fontsize=12, color=(0.8, 0, 0))
+            page.insert_text((400, y_pos-50), "Vídeo salvo separadamente", fontsize=10, color=(0.8, 0.8, 0.8))
+        y_pos -= 30
+
+    # Rodapé
+    page.draw_line(fitz.Point(50, 80), fitz.Point(545, 80), color=cor_laranja, width=1)
+    page.insert_text((50, 60), "Gerado por Riggy - UDP SensaGram", fontsize=10, color=cor_cinza)
+    page.insert_text((50, 45), f"Relatório gerado em {datetime.now():%d/%m/%Y às %H:%M:%S}", fontsize=9, color=cor_cinza)
+    page.insert_text((400, 60), f"Página 1 de 1", fontsize=10, color=cor_cinza)
+
+    doc.save(pdf_filename)
+    doc.close()
+
     try:
-        os.startfile(filename)
+        os.startfile(pdf_filename)
     except:
         pass
 
+    print(f"Relatório gerado: {pdf_filename}")
+    if video_filename and os.path.isfile(video_filename):
+        print(f"Vídeo salvo: {video_filename}")
 
 # === THREAD UDP ===
 def servidor_udp():
@@ -166,7 +325,7 @@ def servidor_udp():
         tilts.append(tilt_angle)
         tilts_all.append(tilt_angle)
 
-        # Vibração com suavização (média móvel)
+        # Vibração com suavização
         total_acc = math.sqrt(ax*ax + ay*ay + az*az)
         vib = abs(total_acc - 9.81)
         vibracoes.append(vib)
@@ -176,7 +335,7 @@ def servidor_udp():
         tempo.append(t)
         t += 1
 
-        # Alerta de inclinação (baseado na média)
+        # Alerta de inclinação
         if grafico_tilt_var.get():
             avg_tilt = sum(tilts) / len(tilts) if tilts else 0
             if avg_tilt >= TILT_THRESHOLD and not tilt_alerted:
@@ -186,7 +345,7 @@ def servidor_udp():
             if avg_tilt < TILT_THRESHOLD - 20:
                 tilt_alerted = False
 
-        # Alerta de vibração (baseado na média)
+        # Alerta de vibração
         if grafico_vib_var.get():
             if avg_vib >= VIB_THRESHOLD and not vib_alerted:
                 alerts.append(('vibração', datetime.now(), avg_vib))
@@ -195,10 +354,9 @@ def servidor_udp():
             if avg_vib < VIB_THRESHOLD - 0.3:
                 vib_alerted = False
 
-
 # === INTERFACE ===
 ctk.set_appearance_mode('dark')
-ctk.set_default_color_theme('dark-blue')  # Usaremos customização manual para laranja
+ctk.set_default_color_theme('dark-blue')
 
 # Cores customizadas
 COR_LARANJA = '#FF8800'
@@ -210,7 +368,8 @@ app = ctk.CTk()
 app.title('Riggy - UDP SensaGram')
 app.geometry('900x700')
 app.configure(bg=COR_PRETO)
-# Define o ícone da janela, se disponível
+
+# Define o ícone da janela
 ico_path = os.path.join(os.path.dirname(__file__), 'riggy-logo.ico')
 if os.path.isfile(ico_path):
     try:
@@ -218,17 +377,15 @@ if os.path.isfile(ico_path):
     except Exception:
         pass
 
-# Função para obter o IP local preferencialmente do Wi-Fi
+# Função para obter o IP local
 import sys
 import platform
 
 def get_local_ip():
     try:
-        # Método universal: conecta a um IP externo e pega o IP local usado
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0)
         try:
-            # Não precisa estar online, só resolve a interface local
             s.connect(('8.8.8.8', 80))
             ip = s.getsockname()[0]
         except Exception:
@@ -252,41 +409,31 @@ def get_wifi_ssid():
             pass
     return 'N/A'
 
-# ===== NOVO LAYOUT PRINCIPAL =====
-# Frame do título
+# Layout principal
 frame_titulo = ctk.CTkFrame(app, fg_color='transparent')
 frame_titulo.pack(fill='x', pady=(10, 0))
 label_titulo = ctk.CTkLabel(frame_titulo, text='Riggy', font=('Segoe UI', 24, 'bold'), text_color=COR_LARANJA)
 label_titulo.pack(anchor='center')
 
-# Adiciona o label de IP, porta e Wi-Fi logo abaixo do título
 local_ip = get_local_ip()
 wifi_ssid = get_wifi_ssid()
 label_ip = ctk.CTkLabel(frame_titulo, text=f'ip: {local_ip}  port: {PORTA_UDP}  wifi: {wifi_ssid}', font=('Segoe UI', 14), text_color=COR_TEXTO)
 label_ip.pack(anchor='center', pady=(2, 0))
 
-# Frame principal dividido (esquerda/direita)
 frame_principal = ctk.CTkFrame(app, fg_color='transparent')
 frame_principal.pack(fill='both', expand=True, padx=20, pady=10)
 
-# Frame esquerdo (controles)
 frame_esquerdo = ctk.CTkFrame(frame_principal, fg_color=COR_CINZA, corner_radius=16, width=300)
 frame_esquerdo.pack(side='left', fill='y', padx=(0, 20), pady=0)
 frame_esquerdo.pack_propagate(False)
 
-# Frame direito (conteúdo)
 frame_direito = ctk.CTkFrame(frame_principal, fg_color=COR_CINZA, corner_radius=16)
 frame_direito.pack(side='right', fill='both', expand=True, pady=0)
 
-# ===== FIM NOVO LAYOUT PRINCIPAL =====
-
-# (O restante da interface será migrado para os novos frames nas próximas etapas)
-
-# ===== ABA SUPERIOR: CHECKBOXES DE GRÁFICOS =====
+# Checkboxes de gráficos
 checkbox_frame = ctk.CTkFrame(frame_esquerdo, fg_color='transparent')
 checkbox_frame.pack(fill='x', pady=(10, 0))
 
-# Variáveis de controle dos checkboxes
 grafico_tilt_var = ctk.BooleanVar(value=False)
 grafico_vib_var = ctk.BooleanVar(value=False)
 
@@ -306,18 +453,16 @@ checkbox_vib = ctk.CTkCheckBox(
     command=on_checkbox_change, font=('Segoe UI', 13), text_color=COR_TEXTO
 )
 checkbox_vib.pack(side='left', padx=10, pady=5)
-# ===== FIM ABA SUPERIOR =====
 
 status_label = ctk.CTkLabel(frame_esquerdo, text='Pronto para iniciar', font=('Segoe UI', 16, 'bold'), text_color=COR_LARANJA)
 status_label.pack(pady=(10, 20))
 
-# Subplots dinâmicos
+# Gráficos
 fig, axs = plt.subplots(2, 1, figsize=(7, 5))
 fig.patch.set_facecolor(COR_CINZA)
 fig.tight_layout(pad=3.0)
 canvas = FigureCanvasTkAgg(fig, frame_direito)
 
-# Customização dos gráficos
 plt.rcParams['axes.facecolor'] = COR_CINZA
 plt.rcParams['figure.facecolor'] = COR_CINZA
 plt.rcParams['axes.labelcolor'] = COR_TEXTO
@@ -326,14 +471,10 @@ plt.rcParams['ytick.color'] = COR_TEXTO
 plt.rcParams['axes.edgecolor'] = COR_PRETO
 plt.rcParams['text.color'] = COR_TEXTO
 
-
-# Função para atualizar os gráficos exibidos
-
 def update_graph():
-    # Limpa todos os eixos
     for ax in axs:
         ax.clear()
-        ax.set_visible(False)  # Oculta todos inicialmente
+        ax.set_visible(False)
 
     show_tilt = grafico_tilt_var.get()
     show_vib = grafico_vib_var.get()
@@ -345,7 +486,6 @@ def update_graph():
         return
 
     if show_tilt and show_vib:
-        # Dois gráficos: tilt em axs[0], vib em axs[1]
         axs[0].set_visible(True)
         axs[1].set_visible(True)
         if tilts:
@@ -386,33 +526,33 @@ def update_graph():
 
     fig.tight_layout(pad=3.0)
     canvas.draw()
+    
+    # Captura frame para gravação
+    if recording:
+        capturar_frame_grafico()
+    
     if running:
         app.after(50, update_graph)
 
-# Atualizar gráficos ao mudar seleção dos checkboxes
 grafico_tilt_var.trace_add('write', lambda *a: update_graph())
 grafico_vib_var.trace_add('write', lambda *a: update_graph())
 
 btn_frame = ctk.CTkFrame(frame_esquerdo, fg_color='transparent')
 btn_frame.pack(pady=(10, 0))
 
-# ===== ABA INFERIOR: INPUTS DE LIMITES DINÂMICOS =====
+# Inputs de limites
 frame_limites = ctk.CTkFrame(frame_esquerdo, fg_color='transparent')
 frame_limites.pack(fill='x', pady=(10, 0))
 
-# Variáveis dos inputs
 entry_tilt_limit = None
 entry_vib_limit = None
 label_tilt = None
 label_vib = None
 label_nenhum = None
 
-# Função para checar se pode habilitar o botão iniciar
 def pode_iniciar():
-    # Pelo menos um gráfico selecionado
     if not grafico_tilt_var.get() and not grafico_vib_var.get():
         return False
-    # Se inclinação selecionada, input preenchido e válido
     if grafico_tilt_var.get():
         if not entry_tilt_limit or not entry_tilt_limit.get().strip():
             return False
@@ -420,7 +560,6 @@ def pode_iniciar():
             float(entry_tilt_limit.get())
         except:
             return False
-    # Se vibração selecionada, input preenchido e válido
     if grafico_vib_var.get():
         if not entry_vib_limit or not entry_vib_limit.get().strip():
             return False
@@ -430,14 +569,12 @@ def pode_iniciar():
             return False
     return True
 
-# Atualiza o estado do botão iniciar
 def atualizar_estado_iniciar(*args):
     if pode_iniciar():
         btn_start.configure(state='normal')
     else:
         btn_start.configure(state='disabled')
 
-# Modificar atualizar_inputs_limites para conectar eventos dos inputs
 def atualizar_inputs_limites():
     global entry_tilt_limit, entry_vib_limit, label_tilt, label_vib, label_nenhum
     for widget in frame_limites.winfo_children():
@@ -466,41 +603,24 @@ def atualizar_inputs_limites():
         label_nenhum.pack(pady=10)
     atualizar_estado_iniciar()
 
-# Atualizar estado ao mudar checkboxes
 grafico_tilt_var.trace_add('write', lambda *a: atualizar_estado_iniciar())
 grafico_vib_var.trace_add('write', lambda *a: atualizar_estado_iniciar())
 
-# Remover o botão de relatório do lado esquerdo
-# (Remover este bloco)
-# btn_report = ctk.CTkButton(
-#     btn_frame, text='Relatório',
-#     fg_color=COR_LARANJA, hover_color='#FFB266',
-#     text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
-#     width=140, height=40, corner_radius=10,
-#     command=gerar_relatorio, state='disabled'
-# )
-# btn_report.grid(row=0, column=1, padx=10, pady=10)
-
-# ===== BOTÃO INICIAR NO FINAL DA ESQUERDA =====
 btn_start = ctk.CTkButton(
     frame_esquerdo, text='Iniciar',
     fg_color=COR_LARANJA, hover_color='#FFB266',
     text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
     width=140, height=40, corner_radius=10,
     command=lambda: start_recepcao(),
-    state='disabled'  # Começa desabilitado
+    state='disabled'
 )
 btn_start.pack(side='bottom', pady=20)
 
-# Mover a chamada para cá, após btn_start existir
 def setup_inputs_iniciais():
     atualizar_inputs_limites()
 setup_inputs_iniciais()
-# ===== FIM ABA INFERIOR =====
 
-# ===== LADO DIREITO: PASSO A PASSO E GRÁFICOS =====
-
-# Frame para passo a passo
+# Lado direito
 frame_passos = ctk.CTkFrame(frame_direito, fg_color='transparent')
 frame_passos.pack(fill='both', expand=True)
 label_passos = ctk.CTkLabel(
@@ -510,8 +630,8 @@ label_passos = ctk.CTkLabel(
         '1. Selecione os gráficos desejados à esquerda.\n'
         '2. Defina os limites para cada gráfico selecionado.\n'
         '3. Clique em Iniciar para começar a receber dados.\n'
-        '4. Clique em Encerrar para parar.\n'
-        '5. Gere o relatório após encerrar.'
+        '4. Clique em Encerrar para parar a coleta.\n'
+        '5. Gere o relatório com PDF e vídeo anexado.'
     ),
     font=('Segoe UI', 15),
     justify='left',
@@ -519,14 +639,9 @@ label_passos = ctk.CTkLabel(
 )
 label_passos.pack(padx=30, pady=30, anchor='center')
 
-# Frame para gráficos e botões
 frame_graficos = ctk.CTkFrame(frame_direito, fg_color='transparent')
-# Empacotar o canvas uma única vez dentro de frame_graficos
 canvas.get_tk_widget().pack(fill='both', expand=True, pady=(0, 10))
 
-# Remover mostrar_canvas, esconder_canvas, canvas_esta_visivel
-
-# Frame dos botões de controle
 frame_botoes = ctk.CTkFrame(frame_graficos, fg_color='transparent')
 frame_botoes.pack(fill='x', pady=(10, 10))
 
@@ -549,10 +664,7 @@ btn_report = ctk.CTkButton(
 )
 btn_report.pack(side='left', padx=10)
 
-# Função para alternar conteúdo do lado direito
-# (Apenas pack/pack_forget do frame_graficos, não do canvas)
 def atualizar_lado_direito(estado):
-    # estado: 'passos', 'graficos', 'encerrado'
     if estado == 'passos':
         frame_graficos.pack_forget()
         frame_passos.pack(fill='both', expand=True)
@@ -567,23 +679,26 @@ def atualizar_lado_direito(estado):
         btn_encerrar.configure(state='disabled')
         btn_report.configure(state='normal')
 
-# Inicialmente mostrar passo a passo
 atualizar_lado_direito('passos')
 
 def start_recepcao():
     global running, thread, TILT_THRESHOLD, VIB_THRESHOLD
     reset_dados()
-    # LER LIMITES DIGITADOS
+    
+    # Inicia a gravação de vídeo
+    iniciar_gravacao()
+    
     try:
         if grafico_tilt_var.get() and entry_tilt_limit:
             TILT_THRESHOLD = float(entry_tilt_limit.get())
     except:
-        TILT_THRESHOLD = 80.0  # valor padrão
+        TILT_THRESHOLD = 80.0
     try:
         if grafico_vib_var.get() and entry_vib_limit:
             VIB_THRESHOLD = float(entry_vib_limit.get())
     except:
-        VIB_THRESHOLD = 1.5  # valor padrão
+        VIB_THRESHOLD = 1.5
+    
     running = True
     status_label.configure(text='Recebendo...', text_color=COR_LARANJA)
     btn_start.configure(state='disabled')
@@ -602,8 +717,8 @@ def reset_dados():
     gravity = [0.0, 0.0, 9.81]
     tilt_alerted = False
     vib_alerted = False
-    tilts_all = []  # <- resetar histórico
-    vibracoes_all = []  # <- resetar histórico
+    tilts_all = []
+    vibracoes_all = []
 
 def stop_recepcao():
     global running
