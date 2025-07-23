@@ -404,9 +404,6 @@ if os.path.isfile(ico_path):
         pass
 
 # Função para obter o IP local
-import sys
-import platform
-
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
