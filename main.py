@@ -43,6 +43,9 @@ video_writer = None
 video_filename = None
 frames_buffer = []
 
+# Novo estado para saber se está encerrado
+encerrado = False
+
 tempo = []
 tilts = deque(maxlen=WINDOW_SIZE)
 vibracoes = deque(maxlen=WINDOW_SIZE)
@@ -266,8 +269,34 @@ def gerar_relatorio():
     page.insert_text((50, 45), f"Relatório gerado em {datetime.now():%d/%m/%Y às %H:%M:%S}", fontsize=9, color=cor_cinza)
     page.insert_text((400, 60), f"Página 1 de 1", fontsize=10, color=cor_cinza)
 
+    # --- NOVO: Inserir gráficos completos (por tempo) em nova página ---
+    graficos_paths = salvar_graficos_completos_para_pdf(tilts_all, vibracoes_all, grafico_tilt_var.get(), grafico_vib_var.get())
+    if graficos_paths:
+        page_graficos = doc.new_page(width=595, height=842)
+        y_graf = 800
+        page_graficos.insert_text((60, y_graf-20), "GRÁFICOS COMPLETOS POR TEMPO", fontsize=16, color=cor_laranja)
+        y_graf -= 40
+        for path in graficos_paths:
+            try:
+                img = fitz.Pixmap(path)
+                img_width = 400
+                img_height = int(img.height * (img_width / img.width))
+                img_rect = fitz.Rect((595-img_width)//2, y_graf-img_height, (595+img_width)//2, y_graf)
+                page_graficos.insert_image(img_rect, filename=path)
+                y_graf -= (img_height + 20)
+            except Exception as e:
+                print(f"Erro ao inserir gráfico no PDF: {e}")
+    # --- FIM NOVO ---
+
     doc.save(pdf_filename)
     doc.close()
+
+    # Remove arquivos temporários dos gráficos
+    for path in graficos_paths:
+        try:
+            os.remove(path)
+        except Exception as e:
+            print(f"Erro ao remover arquivo temporário {path}: {e}")
 
     try:
         os.startfile(pdf_filename)
@@ -472,12 +501,36 @@ plt.rcParams['axes.edgecolor'] = COR_PRETO
 plt.rcParams['text.color'] = COR_TEXTO
 
 def update_graph():
+    global encerrado
     for ax in axs:
         ax.clear()
         ax.set_visible(False)
 
     show_tilt = grafico_tilt_var.get()
     show_vib = grafico_vib_var.get()
+
+    # Se não está rodando e está encerrado, mostrar gráfico por tempo
+    if encerrado:
+        if show_tilt:
+            axs[0].set_visible(True)
+            if tilts_all:
+                axs[0].plot(list(range(len(tilts_all))), tilts_all, color=COR_LARANJA, linewidth=2)
+            axs[0].set_ylim(0, 100)
+            axs[0].set_title('Inclinação (°) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
+            axs[0].set_ylabel('Grau', color=COR_TEXTO)
+            axs[0].set_facecolor(COR_CINZA)
+        if show_vib:
+            idx = 1 if show_tilt else 0
+            axs[idx].set_visible(True)
+            if vibracoes_all:
+                axs[idx].plot(list(range(len(vibracoes_all))), vibracoes_all, color='#FFB266', linewidth=2)
+            axs[idx].set_ylim(0, 5)
+            axs[idx].set_title('Vibração (g) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
+            axs[idx].set_ylabel('g', color=COR_TEXTO)
+            axs[idx].set_facecolor(COR_CINZA)
+        fig.tight_layout(pad=3.0)
+        canvas.draw()
+        return
 
     if not show_tilt and not show_vib:
         canvas.draw()
@@ -533,6 +586,35 @@ def update_graph():
     
     if running:
         app.after(50, update_graph)
+
+# Função para salvar gráficos completos para PDF
+def salvar_graficos_completos_para_pdf(tilts_all, vibracoes_all, show_tilt, show_vib):
+    paths = []
+    if show_tilt and tilts_all:
+        fig_tilt, ax_tilt = plt.subplots(figsize=(6, 3))
+        ax_tilt.plot(list(range(len(tilts_all))), tilts_all, color=COR_LARANJA, linewidth=2)
+        ax_tilt.set_ylim(0, 100)
+        ax_tilt.set_title('Inclinação (°) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
+        ax_tilt.set_ylabel('Grau')
+        ax_tilt.set_xlabel('Tempo (amostras)')
+        fig_tilt.tight_layout()
+        tilt_path = f"tilt_grafico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        fig_tilt.savefig(tilt_path)
+        plt.close(fig_tilt)
+        paths.append(tilt_path)
+    if show_vib and vibracoes_all:
+        fig_vib, ax_vib = plt.subplots(figsize=(6, 3))
+        ax_vib.plot(list(range(len(vibracoes_all))), vibracoes_all, color='#FFB266', linewidth=2)
+        ax_vib.set_ylim(0, 5)
+        ax_vib.set_title('Vibração (g) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
+        ax_vib.set_ylabel('g')
+        ax_vib.set_xlabel('Tempo (amostras)')
+        fig_vib.tight_layout()
+        vib_path = f"vib_grafico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        fig_vib.savefig(vib_path)
+        plt.close(fig_vib)
+        paths.append(vib_path)
+    return paths
 
 grafico_tilt_var.trace_add('write', lambda *a: update_graph())
 grafico_vib_var.trace_add('write', lambda *a: update_graph())
@@ -682,7 +764,7 @@ def atualizar_lado_direito(estado):
 atualizar_lado_direito('passos')
 
 def start_recepcao():
-    global running, thread, TILT_THRESHOLD, VIB_THRESHOLD
+    global running, thread, TILT_THRESHOLD, VIB_THRESHOLD, encerrado
     reset_dados()
     
     # Inicia a gravação de vídeo
@@ -700,6 +782,7 @@ def start_recepcao():
         VIB_THRESHOLD = 1.5
     
     running = True
+    encerrado = False
     status_label.configure(text='Recebendo...', text_color=COR_LARANJA)
     btn_start.configure(state='disabled')
     atualizar_lado_direito('graficos')
@@ -721,10 +804,12 @@ def reset_dados():
     vibracoes_all = []
 
 def stop_recepcao():
-    global running
+    global running, encerrado
     running = False
+    encerrado = True
     status_label.configure(text='Parado', text_color=COR_LARANJA)
     btn_start.configure(state='normal')
     atualizar_lado_direito('encerrado')
+    update_graph()
 
 app.mainloop()
