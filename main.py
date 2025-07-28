@@ -494,6 +494,20 @@ plt.rcParams['ytick.color'] = COR_TEXTO
 plt.rcParams['axes.edgecolor'] = COR_PRETO
 plt.rcParams['text.color'] = COR_TEXTO
 
+# Função para suavizar sinal usando FFT (passa-baixa)
+def suavizar_fft(sinal, freq_corte=10, fs=50):
+    if len(sinal) < 2:
+        return sinal
+    N = len(sinal)
+    y = np.array(sinal)
+    y = y - np.mean(y)
+    Y = np.fft.fft(y)
+    freqs = np.fft.fftfreq(N, d=1/fs)
+    # Zera frequências acima do corte
+    Y[np.abs(freqs) > freq_corte] = 0
+    y_suave = np.fft.ifft(Y).real + np.mean(sinal)
+    return y_suave.tolist()
+
 def update_graph():
     global encerrado
     for ax in axs:
@@ -508,7 +522,8 @@ def update_graph():
         if show_tilt:
             axs[0].set_visible(True)
             if tilts_all:
-                axs[0].plot(list(range(len(tilts_all))), tilts_all, color=COR_LARANJA, linewidth=2)
+                suave = suavizar_fft(tilts_all)
+                axs[0].plot(list(range(len(suave))), suave, color=COR_LARANJA, linewidth=2)
             axs[0].set_ylim(0, 100)
             axs[0].set_title('Inclinação (°) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
             axs[0].set_ylabel('Grau', color=COR_TEXTO)
@@ -517,7 +532,8 @@ def update_graph():
             idx = 1 if show_tilt else 0
             axs[idx].set_visible(True)
             if vibracoes_all:
-                axs[idx].plot(list(range(len(vibracoes_all))), vibracoes_all, color='#FFB266', linewidth=2)
+                suave = suavizar_fft(vibracoes_all)
+                axs[idx].plot(list(range(len(suave))), suave, color='#FFB266', linewidth=2)
             axs[idx].set_ylim(0, 5)
             axs[idx].set_title('Vibração (g) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
             axs[idx].set_ylabel('g', color=COR_TEXTO)
@@ -536,16 +552,18 @@ def update_graph():
         axs[0].set_visible(True)
         axs[1].set_visible(True)
         if tilts:
-            pts = list(range(len(tilts)))
-            axs[0].plot(pts, list(tilts), color=COR_LARANJA, linewidth=2)
+            suave = suavizar_fft(list(tilts))
+            pts = list(range(len(suave)))
+            axs[0].plot(pts, suave, color=COR_LARANJA, linewidth=2)
         axs[0].set_ylim(0, 100)
         axs[0].set_title('Inclinação (°)', color=COR_LARANJA, fontsize=12, fontweight='bold')
         axs[0].set_ylabel('Grau', color=COR_TEXTO)
         axs[0].set_facecolor(COR_CINZA)
 
         if vibracoes:
-            pts = list(range(len(vibracoes)))
-            axs[1].plot(pts, list(vibracoes), color='#FFB266', linewidth=2)
+            suave = suavizar_fft(list(vibracoes))
+            pts = list(range(len(suave)))
+            axs[1].plot(pts, suave, color='#FFB266', linewidth=2)
         axs[1].set_ylim(0, 5)
         axs[1].set_title('Vibração (g)', color=COR_LARANJA, fontsize=12, fontweight='bold')
         axs[1].set_ylabel('g', color=COR_TEXTO)
@@ -554,8 +572,9 @@ def update_graph():
     elif show_tilt:
         axs[0].set_visible(True)
         if tilts:
-            pts = list(range(len(tilts)))
-            axs[0].plot(pts, list(tilts), color=COR_LARANJA, linewidth=2)
+            suave = suavizar_fft(list(tilts))
+            pts = list(range(len(suave)))
+            axs[0].plot(pts, suave, color=COR_LARANJA, linewidth=2)
         axs[0].set_ylim(0, 100)
         axs[0].set_title('Inclinação (°)', color=COR_LARANJA, fontsize=12, fontweight='bold')
         axs[0].set_ylabel('Grau', color=COR_TEXTO)
@@ -564,8 +583,9 @@ def update_graph():
     elif show_vib:
         axs[0].set_visible(True)
         if vibracoes:
-            pts = list(range(len(vibracoes)))
-            axs[0].plot(pts, list(vibracoes), color='#FFB266', linewidth=2)
+            suave = suavizar_fft(list(vibracoes))
+            pts = list(range(len(suave)))
+            axs[0].plot(pts, suave, color='#FFB266', linewidth=2)
         axs[0].set_ylim(0, 5)
         axs[0].set_title('Vibração (g)', color=COR_LARANJA, fontsize=12, fontweight='bold')
         axs[0].set_ylabel('g', color=COR_TEXTO)
