@@ -23,7 +23,7 @@ LP_ALPHA = 0.9
 TILT_THRESHOLD = 80.0
 VIB_THRESHOLD = 1.5
 WINDOW_SIZE = 20
-TARGET_FPS = 30  # Aumentado para 30 FPS para mais fluidez
+TARGET_FPS = 15  # FPS reduzido para velocidade correta
 FRAME_INTERVAL = 1.0 / TARGET_FPS  # Intervalo entre frames
 BUFFER_SIZE = 2048  # Buffer maior para melhor performance de rede
 gravacao_inicio = None
@@ -113,51 +113,23 @@ def finalizar_gravacao():
         print("Nenhum frame capturado para gravação")
         return
     try:
-        # Usa FPS fixo de 30 para melhor fluidez
+        # Usa FPS real para velocidade correta
         height, width, channels = frames_buffer[0].shape
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        video_writer = cv2.VideoWriter(video_filename, fourcc, TARGET_FPS, (width, height))
         
-        # Otimização: Usa frames reais sem interpolação excessiva
+        # Calcula FPS real baseado nos frames capturados
+        duracao_segundos = (gravacao_fim - gravacao_inicio).total_seconds()
+        fps_real = len(frames_buffer) / duracao_segundos if duracao_segundos > 0 else TARGET_FPS
+        
+        # Usa FPS real para velocidade correta
+        fps_video = fps_real
+        video_writer = cv2.VideoWriter(video_filename, fourcc, fps_video, (width, height))
+        
+        # Usa frames reais com FPS real para velocidade correta
         if len(frames_buffer) > 1:
-            # Calcula FPS real baseado nos frames capturados
-            duracao_segundos = (gravacao_fim - gravacao_inicio).total_seconds()
-            fps_real = len(frames_buffer) / duracao_segundos if duracao_segundos > 0 else TARGET_FPS
-            
-            # Só interpola se realmente necessário (muito poucos frames)
-            if INTERPOLACAO_HABILITADA and fps_real < TARGET_FPS * 0.3:  # Reduzido para 30% - menos interpolação
-                frames_necessarios = int(duracao_segundos * TARGET_FPS)
-                if frames_necessarios > len(frames_buffer):
-                    frames_interpolados = []
-                    for i in range(frames_necessarios):
-                        # Interpolação mais suave para reduzir ghosting
-                        pos = i * (len(frames_buffer) - 1) / (frames_necessarios - 1)
-                        idx1 = int(pos)
-                        idx2 = min(idx1 + 1, len(frames_buffer) - 1)
-                        frac = pos - idx1
-                        
-                        if idx1 == idx2 or frac < 0.1:  # Evita interpolação desnecessária
-                            frames_interpolados.append(frames_buffer[idx1])
-                        else:
-                            # Interpolação com suavização para reduzir ghosting
-                            frame1 = frames_buffer[idx1].astype(float)
-                            frame2 = frames_buffer[idx2].astype(float)
-                            
-                            # Aplica suavização na interpolação
-                            frame_interp = (frame1 * (1 - frac) + frame2 * frac).astype(np.uint8)
-                            
-                            # Filtro adicional para reduzir ghosting
-                            frame_interp = cv2.GaussianBlur(frame_interp, (3, 3), 0)
-                            frames_interpolados.append(frame_interp)
-                    frames_buffer = frames_interpolados
-                    print(f"Interpolação aplicada: {len(frames_buffer)} frames para {TARGET_FPS} FPS")
-                else:
-                    print(f"Usando frames reais: {len(frames_buffer)} frames em {fps_real:.2f} FPS")
-            else:
-                if INTERPOLACAO_HABILITADA:
-                    print(f"FPS real adequado: {fps_real:.2f} FPS")
-                else:
-                    print(f"Interpolação desabilitada - usando FPS real: {fps_real:.2f} FPS")
+            print(f"Usando frames reais: {len(frames_buffer)} frames")
+            print(f"FPS real calculado: {fps_video:.2f}")
+            print(f"Velocidade do vídeo será igual à velocidade real do teste")
         
         for frame in frames_buffer:
             video_writer.write(frame)
@@ -168,7 +140,12 @@ def finalizar_gravacao():
         fps_real = len(frames_buffer) / duracao_real if duracao_real > 0 else 0
         performance_stats['fps_real'] = fps_real
         
-        print(f"Gravação finalizada: {video_filename} com {len(frames_buffer)} frames")
+        print(f"Gravação finalizada: {video_filename}")
+        print(f"Frames capturados: {len(frames_buffer)}")
+        print(f"FPS real: {fps_video:.2f}")
+        print(f"Duração do teste: {duracao_segundos:.2f} segundos")
+        print(f"Duração do vídeo: {len(frames_buffer) / fps_video:.2f} segundos")
+        print(f"✅ Vídeo com velocidade correta!")
         if video_filename and os.path.isfile(video_filename):
             print(f"Vídeo salvo: {video_filename}")
     except Exception as e:
