@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import socket
 import threading
+import time
 import pygame
 import json
 from datetime import datetime
@@ -17,11 +18,14 @@ import fitz  # PyMuPDF
 
 # === CONFIGURAÇÕES ===
 PORTA_UDP = 5000
-TIMEOUT = 0.02
+TIMEOUT = 0.01  # Reduzido para melhor resposta de rede
 LP_ALPHA = 0.9
 TILT_THRESHOLD = 80.0
 VIB_THRESHOLD = 1.5
 WINDOW_SIZE = 20
+TARGET_FPS = 30  # Aumentado para 30 FPS para mais fluidez
+FRAME_INTERVAL = 1.0 / TARGET_FPS  # Intervalo entre frames
+BUFFER_SIZE = 2048  # Buffer maior para melhor performance de rede
 gravacao_inicio = None
 gravacao_fim = None
 
@@ -39,6 +43,36 @@ recording = False
 video_writer = None
 video_filename = None
 frames_buffer = []
+last_frame_time = 0  # Controle de tempo para frames
+
+# Threads separadas para melhor performance
+data_thread = None
+graph_thread = None
+video_thread = None
+
+# Queues para comunicação entre threads
+import queue
+data_queue = queue.Queue()
+graph_queue = queue.Queue()
+
+# Cache para gráficos - evita recálculos desnecessários
+graph_cache = {}
+last_update_time = 0
+UPDATE_INTERVAL = 0.1  # Atualiza gráficos a cada 100ms
+
+# Métricas de performance
+performance_stats = {
+    'frames_capturados': 0,
+    'tempo_ultima_atualizacao': 0,
+    'fps_real': 0
+}
+
+# Variáveis para loading
+loading_dots = 0
+loading_timer = None
+
+# Configuração para reduzir ghosting
+INTERPOLACAO_HABILITADA = False  # Desabilita interpolação para evitar ghosting
 
 # Novo estado para saber se está encerrado
 encerrado = False
@@ -79,30 +113,87 @@ def finalizar_gravacao():
         print("Nenhum frame capturado para gravação")
         return
     try:
-        duracao_segundos = (gravacao_fim - gravacao_inicio).total_seconds()
-        fps = len(frames_buffer) / duracao_segundos if duracao_segundos > 0 else 10
-
-        print(f"Duração real: {duracao_segundos:.2f}s | FPS calculado: {fps:.2f}")
-
+        # Usa FPS fixo de 30 para melhor fluidez
         height, width, channels = frames_buffer[0].shape
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        video_writer = cv2.VideoWriter(video_filename, fourcc, fps, (width, height))
+        video_writer = cv2.VideoWriter(video_filename, fourcc, TARGET_FPS, (width, height))
+        
+        # Otimização: Usa frames reais sem interpolação excessiva
+        if len(frames_buffer) > 1:
+            # Calcula FPS real baseado nos frames capturados
+            duracao_segundos = (gravacao_fim - gravacao_inicio).total_seconds()
+            fps_real = len(frames_buffer) / duracao_segundos if duracao_segundos > 0 else TARGET_FPS
+            
+            # Só interpola se realmente necessário (muito poucos frames)
+            if INTERPOLACAO_HABILITADA and fps_real < TARGET_FPS * 0.3:  # Reduzido para 30% - menos interpolação
+                frames_necessarios = int(duracao_segundos * TARGET_FPS)
+                if frames_necessarios > len(frames_buffer):
+                    frames_interpolados = []
+                    for i in range(frames_necessarios):
+                        # Interpolação mais suave para reduzir ghosting
+                        pos = i * (len(frames_buffer) - 1) / (frames_necessarios - 1)
+                        idx1 = int(pos)
+                        idx2 = min(idx1 + 1, len(frames_buffer) - 1)
+                        frac = pos - idx1
+                        
+                        if idx1 == idx2 or frac < 0.1:  # Evita interpolação desnecessária
+                            frames_interpolados.append(frames_buffer[idx1])
+                        else:
+                            # Interpolação com suavização para reduzir ghosting
+                            frame1 = frames_buffer[idx1].astype(float)
+                            frame2 = frames_buffer[idx2].astype(float)
+                            
+                            # Aplica suavização na interpolação
+                            frame_interp = (frame1 * (1 - frac) + frame2 * frac).astype(np.uint8)
+                            
+                            # Filtro adicional para reduzir ghosting
+                            frame_interp = cv2.GaussianBlur(frame_interp, (3, 3), 0)
+                            frames_interpolados.append(frame_interp)
+                    frames_buffer = frames_interpolados
+                    print(f"Interpolação aplicada: {len(frames_buffer)} frames para {TARGET_FPS} FPS")
+                else:
+                    print(f"Usando frames reais: {len(frames_buffer)} frames em {fps_real:.2f} FPS")
+            else:
+                if INTERPOLACAO_HABILITADA:
+                    print(f"FPS real adequado: {fps_real:.2f} FPS")
+                else:
+                    print(f"Interpolação desabilitada - usando FPS real: {fps_real:.2f} FPS")
+        
         for frame in frames_buffer:
             video_writer.write(frame)
         video_writer.release()
         video_writer = None
+        # Calcula FPS real
+        duracao_real = (gravacao_fim - gravacao_inicio).total_seconds()
+        fps_real = len(frames_buffer) / duracao_real if duracao_real > 0 else 0
+        performance_stats['fps_real'] = fps_real
+        
         print(f"Gravação finalizada: {video_filename} com {len(frames_buffer)} frames")
+        if video_filename and os.path.isfile(video_filename):
+            print(f"Vídeo salvo: {video_filename}")
     except Exception as e:
         print(f"Erro ao finalizar gravação: {e}")
         if video_writer:
             video_writer.release()
 
 def capturar_frame_grafico():
-    global frames_buffer
+    global frames_buffer, last_frame_time, performance_stats
     if not recording:
         return
     
+    # Controle de FPS - só captura se passou tempo suficiente
+    current_time = time.time()
+    if current_time - last_frame_time < FRAME_INTERVAL:
+        return
+    
+    last_frame_time = current_time
+    
+    # Atualiza métricas de performance
+    performance_stats['frames_capturados'] += 1
+    performance_stats['tempo_ultima_atualizacao'] = current_time
+    
     try:
+        # Otimização: Reduz qualidade para melhor performance
         canvas.draw()
         canvas.flush_events()
         
@@ -117,8 +208,11 @@ def capturar_frame_grafico():
         # Converte RGB para BGR (formato do OpenCV)
         frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
         
-        # Redimensiona para tamanho padrão se necessário
-        frame = cv2.resize(frame, (800, 600))
+        # Redimensiona para tamanho otimizado (menor = mais rápido)
+        frame = cv2.resize(frame, (640, 480))  # Reduzido de 800x600
+        
+        # Compressão para melhor performance
+        frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_LINEAR)
         
         # Adiciona ao buffer
         frames_buffer.append(frame.copy())
@@ -134,9 +228,9 @@ def capturar_frame_grafico():
             buf = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
             buf = buf.reshape(canvas.get_width_height()[::-1] + (3,))
             frame = cv2.cvtColor(buf, cv2.COLOR_RGB2BGR)
-            frame = cv2.resize(frame, (800, 600))
+            frame = cv2.resize(frame, (640, 480))  # Reduzido
             frames_buffer.append(frame.copy())
-            if len(frames_buffer) > 1000:
+            if len(frames_buffer) > 500:  # Reduzido
                 frames_buffer.pop(0)
         except Exception as e2:
             print(f"Erro no fallback: {e2}")
@@ -144,6 +238,10 @@ def capturar_frame_grafico():
 # === RELATÓRIO COM VÍDEO ANEXADO USANDO PyMuPDF ===
 def gerar_relatorio():
     global video_filename, gravacao_inicio, gravacao_fim
+    
+    # Desabilita o botão e mostra loading
+    btn_report.configure(state='disabled', text='Gerando relatório...')
+    app.update()  # Força atualização da interface
 
     finalizar_gravacao()
 
@@ -303,6 +401,41 @@ def gerar_relatorio():
     print(f"Relatório gerado: {pdf_filename}")
     if video_filename and os.path.isfile(video_filename):
         print(f"Vídeo salvo: {video_filename}")
+    
+    # Para a animação e restaura o botão
+    global loading_timer
+    if loading_timer:
+        app.after_cancel(loading_timer)
+    btn_report.configure(state='normal', text='Gerar relatório')
+    app.update()  # Força atualização da interface
+
+def animar_loading():
+    """Anima o texto de loading com pontos"""
+    global loading_dots, loading_timer
+    loading_dots = (loading_dots + 1) % 4
+    dots = "." * loading_dots
+    btn_report.configure(text=f'Gerando relatório{dots}')
+    
+    if btn_report.cget('state') == 'disabled':
+        loading_timer = app.after(500, animar_loading)
+
+def gerar_relatorio_com_loading():
+    """Wrapper para gerar relatório com tratamento de erro"""
+    global loading_timer
+    
+    # Inicia animação de loading
+    loading_dots = 0
+    animar_loading()
+    
+    try:
+        gerar_relatorio()
+    except Exception as e:
+        print(f"Erro ao gerar relatório: {e}")
+        # Garante que o botão seja restaurado mesmo com erro
+        if loading_timer:
+            app.after_cancel(loading_timer)
+        btn_report.configure(state='normal', text='Gerar relatório')
+        app.update()
 
 # === THREAD UDP ===
 def servidor_udp():
@@ -328,6 +461,87 @@ def servidor_udp():
     while running:
         try:
             data, _ = sock.recvfrom(1024)
+            obj = json.loads(data.decode())
+        except:
+            continue
+
+        if 'accelerometer' not in obj.get('type',''):
+            continue
+
+        ax, ay, az = obj.get('values')[:3]
+
+        # Filtro de gravidade
+        gravity[0] = LP_ALPHA*gravity[0] + (1-LP_ALPHA)*ax
+        gravity[1] = LP_ALPHA*gravity[1] + (1-LP_ALPHA)*ay
+        gravity[2] = LP_ALPHA*gravity[2] + (1-LP_ALPHA)*az
+        gx, gy, gz = gravity
+
+        # Inclinação
+        mag = math.sqrt(gx*gx + gy*gy + gz*gz)
+        cos_t = gz/mag if mag else 1
+        cos_t = max(-1.0, min(1.0, cos_t))
+        tilt_angle = math.degrees(math.acos(cos_t))
+        tilts.append(tilt_angle)
+        tilts_all.append(tilt_angle)
+
+        # Vibração com suavização
+        total_acc = math.sqrt(ax*ax + ay*ay + az*az)
+        vib = abs(total_acc - 9.81)
+        vibracoes.append(vib)
+        vibracoes_all.append(vib)
+        avg_vib = sum(vibracoes) / len(vibracoes) if vibracoes else 0
+
+        tempo.append(t)
+        t += 1
+
+        # Alerta de inclinação
+        if grafico_tilt_var.get():
+            avg_tilt = sum(tilts) / len(tilts) if tilts else 0
+            if avg_tilt >= TILT_THRESHOLD and not tilt_alerted:
+                alerts.append(('tilt', datetime.now(), avg_tilt))
+                tocar_alerta('alerta_inclinacao.mp3')
+                tilt_alerted = True
+            if avg_tilt < TILT_THRESHOLD - 20:
+                tilt_alerted = False
+
+        # Alerta de vibração
+        if grafico_vib_var.get():
+            if avg_vib >= VIB_THRESHOLD and not vib_alerted:
+                alerts.append(('vibração', datetime.now(), avg_vib))
+                tocar_alerta('alerta_vibracao.mp3')
+                vib_alerted = True
+            if avg_vib < VIB_THRESHOLD - 0.3:
+                vib_alerted = False
+
+# === THREAD SEPARADA PARA PROCESSAMENTO DE DADOS ===
+def processar_dados_thread():
+    """Thread separada para processamento de dados UDP"""
+    global t, running, gravity, tilt_alerted, vib_alerted
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("0.0.0.0", PORTA_UDP))
+    sock.settimeout(TIMEOUT)
+    
+    # Otimização de rede
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, BUFFER_SIZE)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    # Calibração da gravidade
+    for _ in range(WINDOW_SIZE):
+        if not running: return
+        try:
+            data, _ = sock.recvfrom(BUFFER_SIZE)
+            obj = json.loads(data.decode())
+            if 'accelerometer' in obj.get('type',''):
+                ax, ay, az = obj.get('values')[:3]
+                gravity[0] = LP_ALPHA*gravity[0] + (1-LP_ALPHA)*ax
+                gravity[1] = LP_ALPHA*gravity[1] + (1-LP_ALPHA)*ay
+                gravity[2] = LP_ALPHA*gravity[2] + (1-LP_ALPHA)*az
+        except:
+            pass
+
+    while running:
+        try:
+            data, _ = sock.recvfrom(BUFFER_SIZE)
             obj = json.loads(data.decode())
         except:
             continue
@@ -509,7 +723,17 @@ def suavizar_fft(sinal, freq_corte=10, fs=50):
     return y_suave.tolist()
 
 def update_graph():
-    global encerrado
+    global encerrado, last_update_time, graph_cache
+    
+    # Controle de frequência de atualização
+    current_time = time.time()
+    if current_time - last_update_time < UPDATE_INTERVAL:
+        if running:
+            app.after(50, update_graph)
+        return
+    
+    last_update_time = current_time
+    
     for ax in axs:
         ax.clear()
         ax.set_visible(False)
@@ -599,7 +823,8 @@ def update_graph():
         capturar_frame_grafico()
     
     if running:
-        app.after(50, update_graph)
+        # Reduz frequência de atualização para melhor performance
+        app.after(100, update_graph)  # 10 FPS para interface
 
 # Função para salvar gráficos completos para PDF
 def salvar_graficos_completos_para_pdf(tilts_all, vibracoes_all, show_tilt, show_vib):
@@ -756,7 +981,7 @@ btn_report = ctk.CTkButton(
     fg_color=COR_LARANJA, hover_color='#FFB266',
     text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
     width=140, height=40, corner_radius=10,
-    command=gerar_relatorio, state='disabled'
+    command=gerar_relatorio_com_loading, state='disabled'
 )
 btn_report.pack(side='left', padx=10)
 
@@ -778,7 +1003,7 @@ def atualizar_lado_direito(estado):
 atualizar_lado_direito('passos')
 
 def start_recepcao():
-    global running, thread, TILT_THRESHOLD, VIB_THRESHOLD, encerrado
+    global running, data_thread, TILT_THRESHOLD, VIB_THRESHOLD, encerrado
     reset_dados()
     
     # Inicia a gravação de vídeo
@@ -800,8 +1025,10 @@ def start_recepcao():
     status_label.configure(text='Recebendo...', text_color=COR_LARANJA)
     btn_start.configure(state='disabled')
     atualizar_lado_direito('graficos')
-    thread = threading.Thread(target=servidor_udp, daemon=True)
-    thread.start()
+    
+    # Usa a nova thread otimizada
+    data_thread = threading.Thread(target=processar_dados_thread, daemon=True)
+    data_thread.start()
     update_graph()
 
 def reset_dados():
