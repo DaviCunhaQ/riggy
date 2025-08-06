@@ -14,13 +14,9 @@ import statistics
 import subprocess
 import cv2
 import numpy as np
-
-# Importações para EPUB
 from ebooklib import epub
 from jinja2 import Template
 import base64
-
-# Importações para PDF
 import fitz  # PyMuPDF
 
 # === CONFIGURAÇÕES ===
