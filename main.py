@@ -15,10 +15,13 @@ import subprocess
 import cv2
 import numpy as np
 
-# Novas importações para EPUB
+# Importações para EPUB
 from ebooklib import epub
 from jinja2 import Template
 import base64
+
+# Importações para PDF
+import fitz  # PyMuPDF
 
 # === CONFIGURAÇÕES ===
 PORTA_UDP = 5000
@@ -112,7 +115,8 @@ performance_stats = {
 }
 
 loading_dots = 0
-loading_timer = None
+loading_timer_epub = None
+loading_timer_pdf = None
 
 INTERPOLACAO_HABILITADA = False
 encerrado = False
@@ -261,516 +265,6 @@ def capturar_frame_grafico():
 
 # === TEMPLATE HTML PARA EPUB ===
 EPUB_TEMPLATE = """
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-    <title>{{ titulo }}</title>
-    <meta charset="utf-8"/>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            margin: 20px;
-            color: #333;
-        }
-        .header {
-            text-align: center;
-            border-bottom: 3px solid #FF8800;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
-        }
-        .logo {
-            color: #FF8800;
-            font-size: 24px;
-            font-weight: bold;
-        }
-        .subtitle {
-            color: #666;
-            font-size: 14px;
-        }
-        .section {
-            margin: 20px 0;
-            padding: 15px;
-            border-left: 4px solid #FF8800;
-            background-color: #f9f9f9;
-        }
-        .section-title {
-            color: #FF8800;
-            font-size: 16px;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        .norma-section {
-            background-color: #f0f0ff;
-            border: 2px solid #0066cc;
-            border-radius: 5px;
-            padding: 15px;
-            margin: 20px 0;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin: 15px 0;
-        }
-        .stat-item {
-            margin: 5px 0;
-        }
-        .status-conforme {
-            color: #008000;
-            font-weight: bold;
-        }
-        .status-nao-conforme {
-            color: #cc0000;
-            font-weight: bold;
-        }
-        .video-section {
-            background-color: #1a1a1a;
-            color: white;
-            padding: 20px;
-            border-radius: 5px;
-            margin: 20px 0;
-            text-align: center;
-        }
-        .video-container {
-            margin: 20px 0;
-        }
-        video {
-            max-width: 100%;
-            height: auto;
-            border-radius: 5px;
-        }
-        .footer {
-            border-top: 1px solid #FF8800;
-            padding-top: 15px;
-            margin-top: 30px;
-            font-size: 12px;
-            color: #666;
-        }
-        .chart-container {
-            text-align: center;
-            margin: 20px 0;
-        }
-        .chart-container img {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div class="logo">RELATÓRIO RIGGY</div>
-        <div class="subtitle">UDP SensaGram - Monitoramento de Sensores</div>
-    </div>
-
-    <div class="norma-section">
-        <div class="section-title">📋 NORMA TÉCNICA APLICADA</div>
-        <p><strong>Estrutura Avaliada:</strong> {{ estrutura_atual }}</p>
-        <p><strong>Norma Aplicada:</strong> {{ norma_info.norma }}</p>
-        <p><strong>Descrição:</strong> {{ norma_info.descricao }}</p>
-        <p><strong>Limites:</strong> Inclinação ≤ {{ limite_tilt }}° | Vibração ≤ {{ limite_vib }} {{ unidade_display }}</p>
-    </div>
-
-    <div class="section">
-        <div class="section-title">INFORMAÇÕES GERAIS</div>
-        <div class="stats-grid">
-            <div>
-                <div class="stat-item"><strong>Data e Hora:</strong> {{ data_hora }}</div>
-                <div class="stat-item"><strong>Pontos Coletados:</strong> {{ pontos_coletados }}</div>
-                <div class="stat-item"><strong>Duração do Teste:</strong> {{ duracao_teste }} segundos</div>
-            </div>
-            <div>
-                <div class="stat-item"><strong>Alertas de Inclinação:</strong> {{ alertas_tilt }}</div>
-                <div class="stat-item"><strong>Alertas de Vibração:</strong> {{ alertas_vib }}</div>
-            </div>
-        </div>
-    </div>
-
-    {% if mostrar_tilt %}
-    <div class="section">
-        <div class="section-title">📐 ESTATÍSTICAS DE INCLINAÇÃO (°)</div>
-        <div class="stats-grid">
-            <div>
-                <div class="stat-item"><strong>Média:</strong> {{ tilt_media }}°</div>
-                <div class="stat-item"><strong>Máximo:</strong> {{ tilt_max }}°</div>
-                <div class="stat-item"><strong>Mínimo:</strong> {{ tilt_min }}°</div>
-            </div>
-            <div>
-                <div class="stat-item"><strong>Desvio Padrão:</strong> {{ tilt_std }}°</div>
-                <div class="stat-item"><strong>Limite da Norma:</strong> {{ limite_tilt }}°</div>
-                <div class="stat-item"><strong>Status:</strong> 
-                    <span class="{{ 'status-conforme' if tilt_status == 'CONFORME' else 'status-nao-conforme' }}">
-                        {{ tilt_status }}
-                    </span>
-                </div>
-                <div class="stat-item"><strong>Avaliação:</strong> {{ tilt_avaliacao }}</div>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
-    {% if mostrar_vib %}
-    <div class="section">
-        <div class="section-title">📳 ESTATÍSTICAS DE VIBRAÇÃO ({{ unidade_display }})</div>
-        <div class="stats-grid">
-            <div>
-                <div class="stat-item"><strong>Média:</strong> {{ vib_media }}{{ unidade_display }}</div>
-                <div class="stat-item"><strong>Máximo:</strong> {{ vib_max }}{{ unidade_display }}</div>
-                <div class="stat-item"><strong>Mínimo:</strong> {{ vib_min }}{{ unidade_display }}</div>
-            </div>
-            <div>
-                <div class="stat-item"><strong>Desvio Padrão:</strong> {{ vib_std }}{{ unidade_display }}</div>
-                <div class="stat-item"><strong>Limite da Norma:</strong> {{ limite_vib }}{{ unidade_display }}</div>
-                <div class="stat-item"><strong>Status:</strong> 
-                    <span class="{{ 'status-conforme' if vib_status == 'CONFORME' else 'status-nao-conforme' }}">
-                        {{ vib_status }}
-                    </span>
-                </div>
-                <div class="stat-item"><strong>Avaliação:</strong> {{ vib_avaliacao }}</div>
-            </div>
-        </div>
-        {% if unidade_display == 'm/s²' %}
-        <p style="font-size: 12px; color: #666; margin-top: 10px;">
-            * Valores convertidos de g para m/s² conforme NBR ISO 2631-1
-        </p>
-        {% endif %}
-    </div>
-    {% endif %}
-
-    {% if graficos %}
-    <div class="section">
-        <div class="section-title">📊 GRÁFICOS COMPLETOS POR TEMPO</div>
-        {% for grafico in graficos %}
-        <div class="chart-container">
-            <img src="{{ grafico.src }}" alt="{{ grafico.alt }}" />
-            <p>{{ grafico.titulo }}</p>
-        </div>
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    {% if video_data %}
-    <div class="video-section">
-        <div class="section-title" style="color: #FF8800;">🎥 GRAVAÇÃO DOS GRÁFICOS</div>
-        <p><strong>Arquivo:</strong> {{ video_filename }}</p>
-        <p><strong>Frames Capturados:</strong> {{ frames_capturados }}</p>
-        <p><strong>Duração Aproximada:</strong> {{ duracao_video }} segundos</p>
-        
-        <div class="video-container">
-            <video controls>
-                <source src="{{ video_src }}" type="video/mp4">
-                Seu leitor de EPUB não suporta vídeos HTML5.
-            </video>
-        </div>
-        
-        <p style="color: #FFB266;">📎 Vídeo embutido no EPUB</p>
-        <p style="color: #ccc; font-size: 12px;">
-            O vídeo está incorporado diretamente no arquivo EPUB e pode ser reproduzido 
-            em leitores compatíveis com HTML5 e vídeo.
-        </p>
-    </div>
-    {% endif %}
-
-    <div class="footer">
-        <p><strong>Gerado por Riggy - UDP SensaGram</strong></p>
-        <p>Relatório gerado em {{ data_hora }}</p>
-    </div>
-</body>
-</html>
-"""
-
-# === GERAÇÃO DE RELATÓRIO EPUB ===
-def gerar_relatorio_epub():
-    global video_filename, gravacao_inicio, gravacao_fim, ESTRUTURA_ATUAL, UNIDADE_VIB_ATUAL
-    
-    # Desabilita o botão e mostra loading
-    btn_report.configure(state='disabled', text='Gerando relatório EPUB...')
-    app.update()
-
-    finalizar_gravacao()
-
-    now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    epub_filename = f"relatorio_{now}.epub"
-
-    # Calcula estatísticas (mantém o código existente)
-    tilt_list = [v for v in tilts_all if not math.isnan(v)] if grafico_tilt_var.get() else []
-    vib_list = [v for v in vibracoes_all if not math.isnan(v)] if grafico_vib_var.get() else []
-    
-    tilt_media = sum(tilt_list) / len(tilt_list) if tilt_list else 0
-    vib_media = sum(vib_list) / len(vib_list) if vib_list else 0
-    tilt_max = max(tilt_list) if tilt_list else 0
-    tilt_min = min(tilt_list) if tilt_list else 0
-    vib_max = max(vib_list) if vib_list else 0
-    vib_min = min(vib_list) if vib_list else 0
-    tilt_std = statistics.stdev(tilt_list) if len(tilt_list) > 1 else 0
-    vib_std = statistics.stdev(vib_list) if len(vib_list) > 1 else 0
-
-    # Converte estatísticas de vibração para a unidade da norma se necessário
-    if UNIDADE_VIB_ATUAL == 'm/s²':
-        vib_media_norma = g_para_ms2(vib_media)
-        vib_max_norma = g_para_ms2(vib_max)
-        vib_min_norma = g_para_ms2(vib_min)
-        vib_std_norma = g_para_ms2(vib_std)
-        unidade_display = 'm/s²'
-    else:
-        vib_media_norma = vib_media
-        vib_max_norma = vib_max
-        vib_min_norma = vib_min
-        vib_std_norma = vib_std
-        unidade_display = 'g'
-
-    duracao_real = (gravacao_fim - gravacao_inicio).total_seconds() if gravacao_inicio and gravacao_fim else len(frames_buffer)/10
-
-    # Prepara dados para o template
-    norma_info = estruturas_normas.get(ESTRUTURA_ATUAL, estruturas_normas['Personalizada'])
-    
-    # Status de conformidade
-    tilt_status = "CONFORME" if tilt_max < TILT_THRESHOLD else "NÃO CONFORME"
-    vib_max_comparacao = vib_max if UNIDADE_VIB_ATUAL == 'g' else g_para_ms2(vib_max)
-    vib_status = "CONFORME" if vib_max_comparacao < VIB_THRESHOLD else "NÃO CONFORME"
-    
-    # Avaliações técnicas
-    if tilt_max < TILT_THRESHOLD * 0.5:
-        tilt_avaliacao = "EXCELENTE"
-    elif tilt_max < TILT_THRESHOLD * 0.8:
-        tilt_avaliacao = "BOM"
-    elif tilt_max < TILT_THRESHOLD:
-        tilt_avaliacao = "ACEITÁVEL"
-    else:
-        tilt_avaliacao = "CRÍTICO"
-    
-    if vib_max_comparacao < VIB_THRESHOLD * 0.5:
-        vib_avaliacao = "EXCELENTE"
-    elif vib_max_comparacao < VIB_THRESHOLD * 0.8:
-        vib_avaliacao = "BOM"
-    elif vib_max_comparacao < VIB_THRESHOLD:
-        vib_avaliacao = "ACEITÁVEL"
-    else:
-        vib_avaliacao = "CRÍTICO"
-
-    # Gera gráficos para o EPUB
-    graficos_info = []
-    graficos_paths = salvar_graficos_completos_para_epub(tilts_all, vibracoes_all, grafico_tilt_var.get(), grafico_vib_var.get())
-    
-    for i, path in enumerate(graficos_paths):
-        if 'tilt' in path:
-            graficos_info.append({
-                'src': f'images/grafico_tilt_{i}.png',
-                'alt': 'Gráfico de Inclinação por Tempo',
-                'titulo': 'Inclinação (°) por Tempo',
-                'path': path
-            })
-        else:
-            graficos_info.append({
-                'src': f'images/grafico_vib_{i}.png',
-                'alt': 'Gráfico de Vibração por Tempo',
-                'titulo': f'Vibração ({unidade_display}) por Tempo',
-                'path': path
-            })
-
-    # === NOVA LÓGICA PARA VÍDEO ===
-    video_base64 = None
-    video_size_mb = 0
-    if video_filename and os.path.isfile(video_filename):
-        try:
-            # Converte vídeo para H.264 (mais compatível)
-            video_h264_filename = f"video_h264_{now}.mp4"
-            converter_video_para_h264(video_filename, video_h264_filename)
-            
-            # Lê o vídeo convertido
-            with open(video_h264_filename, 'rb') as video_file:
-                video_data = video_file.read()
-                video_size_mb = len(video_data) / (1024 * 1024)  # Tamanho em MB
-                
-                # Se o vídeo for menor que 10MB, converte para base64
-                if video_size_mb < 10:
-                    video_base64 = base64.b64encode(video_data).decode('utf-8')
-                    print(f"✅ Vídeo convertido para base64: {video_size_mb:.2f} MB")
-                else:
-                    print(f"⚠️ Vídeo muito grande ({video_size_mb:.2f} MB), será anexado como arquivo")
-            
-            # Remove o arquivo temporário H.264
-            if os.path.exists(video_h264_filename):
-                os.remove(video_h264_filename)
-                
-        except Exception as e:
-            print(f"Erro ao processar vídeo: {e}")
-            # Fallback: usa o vídeo original
-            try:
-                with open(video_filename, 'rb') as video_file:
-                    video_data = video_file.read()
-                    video_size_mb = len(video_data) / (1024 * 1024)
-            except:
-                video_data = None
-
-    # Dados do template
-    template_data = {
-        'titulo': 'Relatório Riggy - UDP SensaGram',
-        'estrutura_atual': ESTRUTURA_ATUAL,
-        'norma_info': norma_info,
-        'limite_tilt': f"{TILT_THRESHOLD:.1f}",
-        'limite_vib': f"{VIB_THRESHOLD:.2f}",
-        'unidade_display': unidade_display,
-        'data_hora': datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-        'pontos_coletados': len(tempo),
-        'duracao_teste': f"{duracao_real:.1f}",
-        'alertas_tilt': sum(1 for a in alerts if a[0]=='tilt') if grafico_tilt_var.get() else 0,
-        'alertas_vib': sum(1 for a in alerts if a[0]=='vibração') if grafico_vib_var.get() else 0,
-        'mostrar_tilt': grafico_tilt_var.get(),
-        'mostrar_vib': grafico_vib_var.get(),
-        'tilt_media': f"{tilt_media:.2f}",
-        'tilt_max': f"{tilt_max:.2f}",
-        'tilt_min': f"{tilt_min:.2f}",
-        'tilt_std': f"{tilt_std:.2f}",
-        'tilt_status': tilt_status,
-        'tilt_avaliacao': tilt_avaliacao,
-        'vib_media': f"{vib_media_norma:.3f}",
-        'vib_max': f"{vib_max_norma:.3f}",
-        'vib_min': f"{vib_min_norma:.3f}",
-        'vib_std': f"{vib_std_norma:.3f}",
-        'vib_status': vib_status,
-        'vib_avaliacao': vib_avaliacao,
-        'graficos': graficos_info,
-        'video_data': video_filename and os.path.isfile(video_filename),
-        'video_filename': os.path.basename(video_filename) if video_filename else '',
-        'frames_capturados': len(frames_buffer),
-        'duracao_video': f"{duracao_real:.1f}",
-        'video_src': 'video/gravacao.mp4' if video_filename else '',
-        'video_base64': video_base64,
-        'video_size_mb': f"{video_size_mb:.2f}"
-    }
-
-    # Cria o EPUB
-    try:
-        book = epub.EpubBook()
-        
-        # Metadados
-        book.set_identifier('riggy-report-' + now)
-        book.set_title('Relatório Riggy - UDP SensaGram')
-        book.set_language('pt-BR')
-        book.add_author('Riggy - UDP SensaGram')
-        book.add_metadata('DC', 'description', 'Relatório de monitoramento de sensores estruturais')
-
-        # Renderiza o template HTML
-        template = Template(EPUB_TEMPLATE_MELHORADO)
-        html_content = template.render(**template_data)
-        
-        # Cria o capítulo principal
-        chapter = epub.EpubHtml(title='Relatório de Monitoramento', 
-                              file_name='relatorio.xhtml', 
-                              lang='pt-BR')
-        chapter.content = html_content
-        book.add_item(chapter)
-
-        # Adiciona imagens dos gráficos
-        for grafico in graficos_info:
-            if os.path.exists(grafico['path']):
-                with open(grafico['path'], 'rb') as img_file:
-                    img_data = img_file.read()
-                
-                img_item = epub.EpubItem(
-                    uid=f"img_{grafico['src'].split('/')[-1]}",
-                    file_name=grafico['src'],
-                    media_type="image/png",
-                    content=img_data
-                )
-                book.add_item(img_item)
-
-        # Adiciona o vídeo se não foi convertido para base64
-        if video_filename and os.path.isfile(video_filename) and not video_base64:
-            try:
-                with open(video_filename, 'rb') as video_file:
-                    video_data = video_file.read()
-                
-                video_item = epub.EpubItem(
-                    uid="video_gravacao",
-                    file_name="video/gravacao.mp4",
-                    media_type="video/mp4",
-                    content=video_data
-                )
-                book.add_item(video_item)
-                print(f"✅ Vídeo anexado ao EPUB: {len(video_data)} bytes")
-            except Exception as e:
-                print(f"Erro ao anexar vídeo ao EPUB: {e}")
-
-        # Define a ordem de leitura
-        book.toc = [chapter]
-        book.add_item(epub.EpubNcx())
-        book.add_item(epub.EpubNav())
-
-        # Define a spine (ordem dos capítulos)
-        book.spine = ['nav', chapter]
-
-        # Salva o EPUB
-        epub.write_epub(epub_filename, book, {})
-        
-        # Remove arquivos temporários dos gráficos
-        for path in graficos_paths:
-            try:
-                os.remove(path)
-            except Exception as e:
-                print(f"Erro ao remover arquivo temporário {path}: {e}")
-
-        print(f"✅ Relatório EPUB gerado: {epub_filename}")
-        if video_base64:
-            print(f"✅ Vídeo embutido como base64 no HTML")
-        elif video_filename and os.path.isfile(video_filename):
-            print(f"✅ Vídeo anexado como arquivo separado")
-        
-        # Tenta abrir o arquivo
-        try:
-            os.startfile(epub_filename)
-        except:
-            print(f"Arquivo salvo em: {os.path.abspath(epub_filename)}")
-
-    except Exception as e:
-        print(f"Erro ao gerar EPUB: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    # Para a animação e restaura o botão
-    global loading_timer
-    if loading_timer:
-        app.after_cancel(loading_timer)
-    btn_report.configure(state='normal', text='Gerar relatório EPUB')
-    app.update()
-
-def converter_video_para_h264(input_file, output_file):
-    """Converte vídeo para H.264 usando OpenCV para melhor compatibilidade"""
-    try:
-        cap = cv2.VideoCapture(input_file)
-        
-        # Propriedades do vídeo original
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        # Codec H.264 (mais compatível)
-        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264
-        out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
-        
-        frame_count = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            out.write(frame)
-            frame_count += 1
-        
-        cap.release()
-        out.release()
-        
-        print(f"✅ Vídeo convertido para H.264: {frame_count} frames")
-        return True
-        
-    except Exception as e:
-        print(f"Erro na conversão H.264: {e}")
-        return False
-
-# === TEMPLATE HTML MELHORADO PARA EPUB ===
-EPUB_TEMPLATE_MELHORADO = """
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -1046,6 +540,533 @@ EPUB_TEMPLATE_MELHORADO = """
 </html>
 """
 
+# === GERAÇÃO DE RELATÓRIO EPUB ===
+def gerar_relatorio_epub():
+    global video_filename, gravacao_inicio, gravacao_fim, ESTRUTURA_ATUAL, UNIDADE_VIB_ATUAL
+    
+    # Desabilita o botão e mostra loading
+    btn_report_epub.configure(state='disabled', text='Gerando EPUB...')
+    app.update()
+
+    finalizar_gravacao()
+
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    epub_filename = f"relatorio_epub_{now}.epub"
+
+    # Calcula estatísticas (mantém o código existente)
+    tilt_list = [v for v in tilts_all if not math.isnan(v)] if grafico_tilt_var.get() else []
+    vib_list = [v for v in vibracoes_all if not math.isnan(v)] if grafico_vib_var.get() else []
+    
+    tilt_media = sum(tilt_list) / len(tilt_list) if tilt_list else 0
+    vib_media = sum(vib_list) / len(vib_list) if vib_list else 0
+    tilt_max = max(tilt_list) if tilt_list else 0
+    tilt_min = min(tilt_list) if tilt_list else 0
+    vib_max = max(vib_list) if vib_list else 0
+    vib_min = min(vib_list) if vib_list else 0
+    tilt_std = statistics.stdev(tilt_list) if len(tilt_list) > 1 else 0
+    vib_std = statistics.stdev(vib_list) if len(vib_list) > 1 else 0
+
+    # Converte estatísticas de vibração para a unidade da norma se necessário
+    if UNIDADE_VIB_ATUAL == 'm/s²':
+        vib_media_norma = g_para_ms2(vib_media)
+        vib_max_norma = g_para_ms2(vib_max)
+        vib_min_norma = g_para_ms2(vib_min)
+        vib_std_norma = g_para_ms2(vib_std)
+        unidade_display = 'm/s²'
+    else:
+        vib_media_norma = vib_media
+        vib_max_norma = vib_max
+        vib_min_norma = vib_min
+        vib_std_norma = vib_std
+        unidade_display = 'g'
+
+    duracao_real = (gravacao_fim - gravacao_inicio).total_seconds() if gravacao_inicio and gravacao_fim else len(frames_buffer)/10
+
+    # Prepara dados para o template
+    norma_info = estruturas_normas.get(ESTRUTURA_ATUAL, estruturas_normas['Personalizada'])
+    
+    # Status de conformidade
+    tilt_status = "CONFORME" if tilt_max < TILT_THRESHOLD else "NÃO CONFORME"
+    vib_max_comparacao = vib_max if UNIDADE_VIB_ATUAL == 'g' else g_para_ms2(vib_max)
+    vib_status = "CONFORME" if vib_max_comparacao < VIB_THRESHOLD else "NÃO CONFORME"
+    
+    # Avaliações técnicas
+    if tilt_max < TILT_THRESHOLD * 0.5:
+        tilt_avaliacao = "EXCELENTE"
+    elif tilt_max < TILT_THRESHOLD * 0.8:
+        tilt_avaliacao = "BOM"
+    elif tilt_max < TILT_THRESHOLD:
+        tilt_avaliacao = "ACEITÁVEL"
+    else:
+        tilt_avaliacao = "CRÍTICO"
+    
+    if vib_max_comparacao < VIB_THRESHOLD * 0.5:
+        vib_avaliacao = "EXCELENTE"
+    elif vib_max_comparacao < VIB_THRESHOLD * 0.8:
+        vib_avaliacao = "BOM"
+    elif vib_max_comparacao < VIB_THRESHOLD:
+        vib_avaliacao = "ACEITÁVEL"
+    else:
+        vib_avaliacao = "CRÍTICO"
+
+    # Gera gráficos para o EPUB
+    graficos_info = []
+    graficos_paths = salvar_graficos_completos_para_epub(tilts_all, vibracoes_all, grafico_tilt_var.get(), grafico_vib_var.get())
+    
+    for i, path in enumerate(graficos_paths):
+        if 'tilt' in path:
+            graficos_info.append({
+                'src': f'images/grafico_tilt_{i}.png',
+                'alt': 'Gráfico de Inclinação por Tempo',
+                'titulo': 'Inclinação (°) por Tempo',
+                'path': path
+            })
+        else:
+            graficos_info.append({
+                'src': f'images/grafico_vib_{i}.png',
+                'alt': 'Gráfico de Vibração por Tempo',
+                'titulo': f'Vibração ({unidade_display}) por Tempo',
+                'path': path
+            })
+
+    # === LÓGICA PARA VÍDEO ===
+    video_base64 = None
+    video_size_mb = 0
+    if video_filename and os.path.isfile(video_filename):
+        try:
+            # Converte vídeo para H.264 (mais compatível)
+            video_h264_filename = f"video_h264_{now}.mp4"
+            converter_video_para_h264(video_filename, video_h264_filename)
+            
+            # Lê o vídeo convertido
+            with open(video_h264_filename, 'rb') as video_file:
+                video_data = video_file.read()
+                video_size_mb = len(video_data) / (1024 * 1024)  # Tamanho em MB
+                
+                # Se o vídeo for menor que 10MB, converte para base64
+                if video_size_mb < 10:
+                    video_base64 = base64.b64encode(video_data).decode('utf-8')
+                    print(f"✅ Vídeo convertido para base64: {video_size_mb:.2f} MB")
+                else:
+                    print(f"⚠️ Vídeo muito grande ({video_size_mb:.2f} MB), será anexado como arquivo")
+            
+            # Remove o arquivo temporário H.264
+            if os.path.exists(video_h264_filename):
+                os.remove(video_h264_filename)
+                
+        except Exception as e:
+            print(f"Erro ao processar vídeo: {e}")
+            # Fallback: usa o vídeo original
+            try:
+                with open(video_filename, 'rb') as video_file:
+                    video_data = video_file.read()
+                    video_size_mb = len(video_data) / (1024 * 1024)
+            except:
+                video_data = None
+
+    # Dados do template
+    template_data = {
+        'titulo': 'Relatório Riggy - UDP SensaGram',
+        'estrutura_atual': ESTRUTURA_ATUAL,
+        'norma_info': norma_info,
+        'limite_tilt': f"{TILT_THRESHOLD:.1f}",
+        'limite_vib': f"{VIB_THRESHOLD:.2f}",
+        'unidade_display': unidade_display,
+        'data_hora': datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        'pontos_coletados': len(tempo),
+        'duracao_teste': f"{duracao_real:.1f}",
+        'alertas_tilt': sum(1 for a in alerts if a[0]=='tilt') if grafico_tilt_var.get() else 0,
+        'alertas_vib': sum(1 for a in alerts if a[0]=='vibração') if grafico_vib_var.get() else 0,
+        'mostrar_tilt': grafico_tilt_var.get(),
+        'mostrar_vib': grafico_vib_var.get(),
+        'tilt_media': f"{tilt_media:.2f}",
+        'tilt_max': f"{tilt_max:.2f}",
+        'tilt_min': f"{tilt_min:.2f}",
+        'tilt_std': f"{tilt_std:.2f}",
+        'tilt_status': tilt_status,
+        'tilt_avaliacao': tilt_avaliacao,
+        'vib_media': f"{vib_media_norma:.3f}",
+        'vib_max': f"{vib_max_norma:.3f}",
+        'vib_min': f"{vib_min_norma:.3f}",
+        'vib_std': f"{vib_std_norma:.3f}",
+        'vib_status': vib_status,
+        'vib_avaliacao': vib_avaliacao,
+        'graficos': graficos_info,
+        'video_data': video_filename and os.path.isfile(video_filename),
+        'video_filename': os.path.basename(video_filename) if video_filename else '',
+        'frames_capturados': len(frames_buffer),
+        'duracao_video': f"{duracao_real:.1f}",
+        'video_src': 'video/gravacao.mp4' if video_filename else '',
+        'video_base64': video_base64,
+        'video_size_mb': f"{video_size_mb:.2f}"
+    }
+
+    # Cria o EPUB
+    try:
+        book = epub.EpubBook()
+        
+        # Metadados
+        book.set_identifier('riggy-report-' + now)
+        book.set_title('Relatório Riggy - UDP SensaGram')
+        book.set_language('pt-BR')
+        book.add_author('Riggy - UDP SensaGram')
+        book.add_metadata('DC', 'description', 'Relatório de monitoramento de sensores estruturais')
+
+        # Renderiza o template HTML
+        template = Template(EPUB_TEMPLATE)
+        html_content = template.render(**template_data)
+        
+        # Cria o capítulo principal
+        chapter = epub.EpubHtml(title='Relatório de Monitoramento', 
+                              file_name='relatorio.xhtml', 
+                              lang='pt-BR')
+        chapter.content = html_content
+        book.add_item(chapter)
+
+        # Adiciona imagens dos gráficos
+        for grafico in graficos_info:
+            if os.path.exists(grafico['path']):
+                with open(grafico['path'], 'rb') as img_file:
+                    img_data = img_file.read()
+                
+                img_item = epub.EpubItem(
+                    uid=f"img_{grafico['src'].split('/')[-1]}",
+                    file_name=grafico['src'],
+                    media_type="image/png",
+                    content=img_data
+                )
+                book.add_item(img_item)
+
+        # Adiciona o vídeo se não foi convertido para base64
+        if video_filename and os.path.isfile(video_filename) and not video_base64:
+            try:
+                with open(video_filename, 'rb') as video_file:
+                    video_data = video_file.read()
+                
+                video_item = epub.EpubItem(
+                    uid="video_gravacao",
+                    file_name="video/gravacao.mp4",
+                    media_type="video/mp4",
+                    content=video_data
+                )
+                book.add_item(video_item)
+                print(f"✅ Vídeo anexado ao EPUB: {len(video_data)} bytes")
+            except Exception as e:
+                print(f"Erro ao anexar vídeo ao EPUB: {e}")
+
+        # Define a ordem de leitura
+        book.toc = [chapter]
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+
+        # Define a spine (ordem dos capítulos)
+        book.spine = ['nav', chapter]
+
+        # Salva o EPUB
+        epub.write_epub(epub_filename, book, {})
+        
+        # Remove arquivos temporários dos gráficos
+        for path in graficos_paths:
+            try:
+                os.remove(path)
+            except Exception as e:
+                print(f"Erro ao remover arquivo temporário {path}: {e}")
+
+        print(f"✅ Relatório EPUB gerado: {epub_filename}")
+        if video_base64:
+            print(f"✅ Vídeo embutido como base64 no HTML")
+        elif video_filename and os.path.isfile(video_filename):
+            print(f"✅ Vídeo anexado como arquivo separado")
+        
+        # Tenta abrir o arquivo
+        try:
+            os.startfile(epub_filename)
+        except:
+            print(f"Arquivo salvo em: {os.path.abspath(epub_filename)}")
+
+    except Exception as e:
+        print(f"Erro ao gerar EPUB: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Para a animação e restaura o botão
+    global loading_timer_epub
+    if loading_timer_epub:
+        app.after_cancel(loading_timer_epub)
+    btn_report_epub.configure(state='normal', text='Gerar EPUB')
+    app.update()
+
+def converter_video_para_h264(input_file, output_file):
+    """Converte vídeo para H.264 usando OpenCV para melhor compatibilidade"""
+    try:
+        cap = cv2.VideoCapture(input_file)
+        
+        # Propriedades do vídeo original
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Codec H.264 (mais compatível)
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264
+        out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
+        
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            out.write(frame)
+            frame_count += 1
+        
+        cap.release()
+        out.release()
+        
+        print(f"✅ Vídeo convertido para H.264: {frame_count} frames")
+        return True
+        
+    except Exception as e:
+        print(f"Erro na conversão H.264: {e}")
+        return False
+
+# === GERAÇÃO DE RELATÓRIO PDF (FUNCIONALIDADE ORIGINAL) ===
+def gerar_relatorio_pdf():
+    global video_filename, gravacao_inicio, gravacao_fim, ESTRUTURA_ATUAL, UNIDADE_VIB_ATUAL
+    
+    # Desabilita o botão e mostra loading
+    btn_report_pdf.configure(state='disabled', text='Gerando PDF...')
+    app.update()
+
+    finalizar_gravacao()
+
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pdf_filename = f"relatorio_pdf_{now}.pdf"
+
+    # Estatísticas
+    tilt_list = [v for v in tilts_all if not math.isnan(v)] if grafico_tilt_var.get() else []
+    vib_list = [v for v in vibracoes_all if not math.isnan(v)] if grafico_vib_var.get() else []
+    tilt_media = sum(tilt_list) / len(tilt_list) if tilt_list else 0
+    vib_media = sum(vib_list) / len(vib_list) if vib_list else 0
+    tilt_max = max(tilt_list) if tilt_list else 0
+    tilt_min = min(tilt_list) if tilt_list else 0
+    vib_max = max(vib_list) if vib_list else 0
+    vib_min = min(vib_list) if vib_list else 0
+    tilt_std = statistics.stdev(tilt_list) if len(tilt_list) > 1 else 0
+    vib_std = statistics.stdev(vib_list) if len(vib_list) > 1 else 0
+
+    # Converte estatísticas de vibração para a unidade da norma se necessário
+    if UNIDADE_VIB_ATUAL == 'm/s²':
+        vib_media_norma = g_para_ms2(vib_media)
+        vib_max_norma = g_para_ms2(vib_max)
+        vib_min_norma = g_para_ms2(vib_min)
+        vib_std_norma = g_para_ms2(vib_std)
+        unidade_display = 'm/s²'
+    else:
+        vib_media_norma = vib_media
+        vib_max_norma = vib_max
+        vib_min_norma = vib_min
+        vib_std_norma = vib_std
+        unidade_display = 'g'
+
+    duracao_real = (gravacao_fim - gravacao_inicio).total_seconds() if gravacao_inicio and gravacao_fim else len(frames_buffer)/10
+
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)  # A4
+
+    cor_laranja = (1, 0.5, 0)
+    cor_preta = (0, 0, 0)
+    cor_cinza = (0.3, 0.3, 0.3)
+    cor_cinza_claro = (0.9, 0.9, 0.9)
+    cor_azul = (0, 0.4, 0.8)
+
+    y_pos = 800
+    desenhou_estatisticas = False
+
+    # Cabeçalho
+    logo_path = os.path.join(os.path.dirname(__file__), 'riggy-logo.jpeg')
+    if os.path.isfile(logo_path):
+        try:
+            logo_rect = fitz.Rect(50, y_pos-60, 110, y_pos)
+            page.insert_image(logo_rect, filename=logo_path)
+        except:
+            pass
+
+    page.insert_text((130, y_pos-20), "RELATÓRIO RIGGY", fontsize=20, color=cor_laranja)
+    page.insert_text((130, y_pos-40), "UDP SensaGram - Monitoramento de Sensores", fontsize=12, color=cor_cinza)
+    page.draw_line(fitz.Point(50, y_pos-70), fitz.Point(545, y_pos-70), color=cor_laranja, width=2)
+    y_pos -= 90
+
+    # === SEÇÃO: INFORMAÇÕES DA NORMA ===
+    norma_info = estruturas_normas.get(ESTRUTURA_ATUAL, estruturas_normas['Personalizada'])
+    norma_rect = fitz.Rect(50, y_pos-100, 545, y_pos)
+    page.draw_rect(norma_rect, color=(0.95, 0.95, 1.0), fill=(0.95, 0.95, 1.0))
+    page.draw_rect(norma_rect, color=cor_azul, width=2)
+    page.insert_text((60, y_pos-15), "📋 NORMA TÉCNICA APLICADA", fontsize=12, color=cor_azul)
+    page.insert_text((60, y_pos-35), f"Estrutura Avaliada: {ESTRUTURA_ATUAL}", fontsize=11, color=cor_preta)
+    page.insert_text((60, y_pos-50), f"Norma Aplicada: {norma_info['norma']}", fontsize=11, color=cor_preta)
+    page.insert_text((60, y_pos-65), f"Descrição: {norma_info['descricao']}", fontsize=9, color=cor_cinza)
+    
+    # Limites da norma
+    limite_tilt_display = TILT_THRESHOLD
+    limite_vib_display = VIB_THRESHOLD if UNIDADE_VIB_ATUAL == 'g' else VIB_THRESHOLD
+    page.insert_text((60, y_pos-80), f"Limites: Inclinação ≤ {limite_tilt_display:.1f}° | Vibração ≤ {limite_vib_display:.2f} {unidade_display}", fontsize=10, color=cor_preta)
+    y_pos -= 120
+
+    # Informações gerais
+    info_rect = fitz.Rect(50, y_pos-80, 545, y_pos)
+    page.draw_rect(info_rect, color=cor_cinza_claro, fill=cor_cinza_claro)
+    page.draw_rect(info_rect, color=cor_cinza, width=1)
+    page.insert_text((60, y_pos-15), "INFORMAÇÕES GERAIS", fontsize=12, color=cor_laranja)
+    page.insert_text((60, y_pos-35), f"Data e Hora: {datetime.now():%d/%m/%Y %H:%M:%S}", fontsize=11, color=cor_preta)
+    page.insert_text((60, y_pos-50), f"Pontos Coletados: {len(tempo)}", fontsize=11, color=cor_preta)
+    page.insert_text((300, y_pos-35), f"Alertas de Inclinação: {sum(1 for a in alerts if a[0]=='tilt') if grafico_tilt_var.get() else 0}", fontsize=11, color=cor_preta)
+    page.insert_text((300, y_pos-50), f"Alertas de Vibração: {sum(1 for a in alerts if a[0]=='vibração') if grafico_vib_var.get() else 0}", fontsize=11, color=cor_preta)
+    page.insert_text((60, y_pos-65), f"Duração do Teste: {duracao_real:.1f} segundos", fontsize=11, color=cor_preta)
+    y_pos -= 100
+
+    # Estatísticas de inclinação
+    if grafico_tilt_var.get():
+        desenhou_estatisticas = True
+        tilt_rect = fitz.Rect(50, y_pos-140, 545, y_pos)
+        page.draw_rect(tilt_rect, color=cor_cinza_claro, fill=cor_cinza_claro)
+        page.draw_rect(tilt_rect, color=cor_cinza, width=1)
+        page.insert_text((60, y_pos-15), "📐 ESTATÍSTICAS DE INCLINAÇÃO (°)", fontsize=12, color=cor_laranja)
+        page.insert_text((60, y_pos-35), f"Média: {tilt_media:.2f}°", fontsize=11, color=cor_preta)
+        page.insert_text((60, y_pos-50), f"Máximo: {tilt_max:.2f}°", fontsize=11, color=cor_preta)
+        page.insert_text((60, y_pos-65), f"Mínimo: {tilt_min:.2f}°", fontsize=11, color=cor_preta)
+        page.insert_text((300, y_pos-35), f"Desvio Padrão: {tilt_std:.2f}°", fontsize=11, color=cor_preta)
+        page.insert_text((300, y_pos-50), f"Limite da Norma: {TILT_THRESHOLD:.1f}°", fontsize=11, color=cor_preta)
+        
+        # Status de conformidade
+        status_tilt = "CONFORME" if tilt_max < TILT_THRESHOLD else "NÃO CONFORME"
+        cor_status = (0, 0.7, 0) if tilt_max < TILT_THRESHOLD else (0.8, 0, 0)
+        page.insert_text((300, y_pos-65), f"Status: {status_tilt}", fontsize=11, color=cor_status)
+        
+        # Avaliação técnica
+        if tilt_max < TILT_THRESHOLD * 0.5:
+            avaliacao = "EXCELENTE"
+        elif tilt_max < TILT_THRESHOLD * 0.8:
+            avaliacao = "BOM"
+        elif tilt_max < TILT_THRESHOLD:
+            avaliacao = "ACEITÁVEL"
+        else:
+            avaliacao = "CRÍTICO"
+        page.insert_text((300, y_pos-80), f"Avaliação: {avaliacao}", fontsize=10, color=cor_cinza)
+        y_pos -= 160
+
+    # Estatísticas de vibração
+    if grafico_vib_var.get():
+        desenhou_estatisticas = True
+        vib_rect = fitz.Rect(50, y_pos-140, 545, y_pos)
+        page.draw_rect(vib_rect, color=cor_cinza_claro, fill=cor_cinza_claro)
+        page.draw_rect(vib_rect, color=cor_cinza, width=1)
+        page.insert_text((60, y_pos-15), f"📳 ESTATÍSTICAS DE VIBRAÇÃO ({unidade_display})", fontsize=12, color=cor_laranja)
+        page.insert_text((60, y_pos-35), f"Média: {vib_media_norma:.3f}{unidade_display}", fontsize=11, color=cor_preta)
+        page.insert_text((60, y_pos-50), f"Máximo: {vib_max_norma:.3f}{unidade_display}", fontsize=11, color=cor_preta)
+        page.insert_text((60, y_pos-65), f"Mínimo: {vib_min_norma:.3f}{unidade_display}", fontsize=11, color=cor_preta)
+        page.insert_text((300, y_pos-35), f"Desvio Padrão: {vib_std_norma:.3f}{unidade_display}", fontsize=11, color=cor_preta)
+        
+        limite_vib_display_norma = VIB_THRESHOLD if UNIDADE_VIB_ATUAL == 'g' else VIB_THRESHOLD
+        page.insert_text((300, y_pos-50), f"Limite da Norma: {limite_vib_display_norma:.2f}{unidade_display}", fontsize=11, color=cor_preta)
+        
+        # Status de conformidade (comparação na unidade correta)
+        vib_max_comparacao = vib_max if UNIDADE_VIB_ATUAL == 'g' else g_para_ms2(vib_max)
+        limite_comparacao = VIB_THRESHOLD
+        status_vib = "CONFORME" if vib_max_comparacao < limite_comparacao else "NÃO CONFORME"
+        cor_status = (0, 0.7, 0) if vib_max_comparacao < limite_comparacao else (0.8, 0, 0)
+        page.insert_text((300, y_pos-65), f"Status: {status_vib}", fontsize=11, color=cor_status)
+        
+        # Avaliação técnica
+        if vib_max_comparacao < limite_comparacao * 0.5:
+            avaliacao = "EXCELENTE"
+        elif vib_max_comparacao < limite_comparacao * 0.8:
+            avaliacao = "BOM"
+        elif vib_max_comparacao < limite_comparacao:
+            avaliacao = "ACEITÁVEL"
+        else:
+            avaliacao = "CRÍTICO"
+        page.insert_text((300, y_pos-80), f"Avaliação: {avaliacao}", fontsize=10, color=cor_cinza)
+        
+        # Nota sobre conversão de unidades
+        if UNIDADE_VIB_ATUAL == 'm/s²':
+            page.insert_text((60, y_pos-95), "* Valores convertidos de g para m/s² conforme NBR ISO 2631-1", fontsize=8, color=cor_cinza)
+        y_pos -= 160
+
+    # Se nenhuma estatística foi desenhada, corrige o y_pos
+    if not desenhou_estatisticas:
+        y_pos -= 40
+
+    # Seção de vídeo
+    if video_filename and os.path.isfile(video_filename):
+        video_rect = fitz.Rect(50, y_pos-100, 545, y_pos)
+        page.draw_rect(video_rect, color=(0.1, 0.1, 0.1), fill=(0.1, 0.1, 0.1))
+        page.draw_rect(video_rect, color=cor_laranja, width=2)
+        page.insert_text((60, y_pos-15), "🎥 GRAVAÇÃO DOS GRÁFICOS", fontsize=12, color=cor_laranja)
+        page.insert_text((60, y_pos-35), f"Arquivo: {video_filename}", fontsize=11, color=(1, 1, 1))
+        page.insert_text((60, y_pos-50), f"Frames Capturados: {len(frames_buffer)}", fontsize=11, color=(1, 1, 1))
+        page.insert_text((60, y_pos-65), f"Duração Aproximada: {duracao_real:.1f} segundos", fontsize=11, color=(1, 1, 1))
+        try:
+            with open(video_filename, 'rb') as video_file:
+                video_bytes = video_file.read()
+            doc.embfile_add(video_filename, video_bytes, filename=os.path.basename(video_filename))
+            page.insert_text((400, y_pos-35), "📎 VÍDEO ANEXADO", fontsize=12, color=cor_laranja)
+            page.insert_text((400, y_pos-50), "Clique no ícone de anexo", fontsize=10, color=(0.8, 0.8, 0.8))
+            page.insert_text((400, y_pos-65), "no seu leitor de PDF", fontsize=10, color=(0.8, 0.8, 0.8))
+        except Exception as e:
+            print(f"Erro ao anexar vídeo: {e}")
+            page.insert_text((400, y_pos-35), "❌ ERRO NO ANEXO", fontsize=12, color=(0.8, 0, 0))
+            page.insert_text((400, y_pos-50), "Vídeo salvo separadamente", fontsize=10, color=(0.8, 0.8, 0.8))
+        y_pos -= 30
+
+    # Rodapé
+    page.draw_line(fitz.Point(50, 80), fitz.Point(545, 80), color=cor_laranja, width=1)
+    page.insert_text((50, 60), "Gerado por Riggy - UDP SensaGram", fontsize=10, color=cor_cinza)
+    page.insert_text((50, 45), f"Relatório gerado em {datetime.now():%d/%m/%Y às %H:%M:%S}", fontsize=9, color=cor_cinza)
+    page.insert_text((400, 60), f"Página 1 de 1", fontsize=10, color=cor_cinza)
+
+    # Inserir gráficos completos (por tempo) em nova página
+    graficos_paths = salvar_graficos_completos_para_pdf(tilts_all, vibracoes_all, grafico_tilt_var.get(), grafico_vib_var.get())
+    if graficos_paths:
+        page_graficos = doc.new_page(width=595, height=842)
+        y_graf = 800
+        page_graficos.insert_text((60, y_graf-20), "GRÁFICOS COMPLETOS POR TEMPO", fontsize=16, color=cor_laranja)
+        y_graf -= 40
+        for path in graficos_paths:
+            try:
+                img = fitz.Pixmap(path)
+                img_width = 400
+                img_height = int(img.height * (img_width / img.width))
+                img_rect = fitz.Rect((595-img_width)//2, y_graf-img_height, (595+img_width)//2, y_graf)
+                page_graficos.insert_image(img_rect, filename=path)
+                y_graf -= (img_height + 20)
+            except Exception as e:
+                print(f"Erro ao inserir gráfico no PDF: {e}")
+
+    doc.save(pdf_filename)
+    doc.close()
+
+    # Remove arquivos temporários dos gráficos
+    for path in graficos_paths:
+        try:
+            os.remove(path)
+        except Exception as e:
+            print(f"Erro ao remover arquivo temporário {path}: {e}")
+
+    try:
+        os.startfile(pdf_filename)
+    except:
+        pass
+
+    print(f"Relatório PDF gerado: {pdf_filename}")
+    if video_filename and os.path.isfile(video_filename):
+        print(f"Vídeo anexado ao PDF: {video_filename}")
+    
+    # Para a animação e restaura o botão
+    global loading_timer_pdf
+    if loading_timer_pdf:
+        app.after_cancel(loading_timer_pdf)
+    btn_report_pdf.configure(state='normal', text='Gerar PDF')
+    app.update()
+
 def salvar_graficos_completos_para_epub(tilts_all, vibracoes_all, show_tilt, show_vib):
     """Salva gráficos como imagens PNG para o EPUB"""
     global UNIDADE_VIB_ATUAL
@@ -1095,31 +1116,105 @@ def salvar_graficos_completos_para_epub(tilts_all, vibracoes_all, show_tilt, sho
     
     return paths
 
-def animar_loading():
-    """Anima o texto de loading com pontos"""
-    global loading_dots, loading_timer
+def salvar_graficos_completos_para_pdf(tilts_all, vibracoes_all, show_tilt, show_vib):
+    """Salva gráficos como imagens PNG para o PDF"""
+    global UNIDADE_VIB_ATUAL
+    paths = []
+    
+    if show_tilt and tilts_all:
+        fig_tilt, ax_tilt = plt.subplots(figsize=(6, 3))
+        ax_tilt.plot(list(range(len(tilts_all))), tilts_all, color='#FF8800', linewidth=2)
+        ax_tilt.set_ylim(0, 100)
+        ax_tilt.set_title('Inclinação (°) por tempo', fontsize=12, fontweight='bold')
+        ax_tilt.set_ylabel('Grau')
+        ax_tilt.set_xlabel('Tempo (amostras)')
+        fig_tilt.tight_layout()
+        tilt_path = f"tilt_grafico_pdf_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        fig_tilt.savefig(tilt_path)
+        plt.close(fig_tilt)
+        paths.append(tilt_path)
+    
+    if show_vib and vibracoes_all:
+        fig_vib, ax_vib = plt.subplots(figsize=(6, 3))
+        
+        # Converte dados para a unidade correta se necessário
+        vib_data = vibracoes_all
+        unidade_display = 'g'
+        if UNIDADE_VIB_ATUAL == 'm/s²':
+            vib_data = [g_para_ms2(v) for v in vibracoes_all]
+            unidade_display = 'm/s²'
+            
+        ax_vib.plot(list(range(len(vib_data))), vib_data, color='#FFB266', linewidth=2)
+        
+        # Ajusta escala baseada na unidade
+        if UNIDADE_VIB_ATUAL == 'm/s²':
+            ax_vib.set_ylim(0, 50)
+        else:
+            ax_vib.set_ylim(0, 5)
+            
+        ax_vib.set_title(f'Vibração ({unidade_display}) por tempo', fontsize=12, fontweight='bold')
+        ax_vib.set_ylabel(unidade_display)
+        ax_vib.set_xlabel('Tempo (amostras)')
+        fig_vib.tight_layout()
+        vib_path = f"vib_grafico_pdf_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        fig_vib.savefig(vib_path)
+        plt.close(fig_vib)
+        paths.append(vib_path)
+    
+    return paths
+
+def animar_loading_epub():
+    """Anima o texto de loading com pontos para EPUB"""
+    global loading_dots, loading_timer_epub
     loading_dots = (loading_dots + 1) % 4
     dots = "." * loading_dots
-    btn_report.configure(text=f'Gerando relatório EPUB{dots}')
+    btn_report_epub.configure(text=f'Gerando EPUB{dots}')
     
-    if btn_report.cget('state') == 'disabled':
-        loading_timer = app.after(500, animar_loading)
+    if btn_report_epub.cget('state') == 'disabled':
+        loading_timer_epub = app.after(500, animar_loading_epub)
 
-def gerar_relatorio_com_loading():
-    """Wrapper para gerar relatório com tratamento de erro"""
-    global loading_timer
+def animar_loading_pdf():
+    """Anima o texto de loading com pontos para PDF"""
+    global loading_dots, loading_timer_pdf
+    loading_dots = (loading_dots + 1) % 4
+    dots = "." * loading_dots
+    btn_report_pdf.configure(text=f'Gerando PDF{dots}')
+    
+    if btn_report_pdf.cget('state') == 'disabled':
+        loading_timer_pdf = app.after(500, animar_loading_pdf)
+
+def gerar_relatorio_epub_com_loading():
+    """Wrapper para gerar relatório EPUB com tratamento de erro"""
+    global loading_timer_epub
     
     # Inicia animação de loading
     loading_dots = 0
-    animar_loading()
+    animar_loading_epub()
     
     try:
-        gerar_relatorio_epub()  # Chama a nova função EPUB
+        gerar_relatorio_epub()
     except Exception as e:
         print(f"Erro ao gerar relatório EPUB: {e}")
-        if loading_timer:
-            app.after_cancel(loading_timer)
-        btn_report.configure(state='normal', text='Gerar relatório EPUB')
+        if loading_timer_epub:
+            app.after_cancel(loading_timer_epub)
+        btn_report_epub.configure(state='normal', text='Gerar EPUB')
+        app.update()
+
+def gerar_relatorio_pdf_com_loading():
+    """Wrapper para gerar relatório PDF com tratamento de erro"""
+    global loading_timer_pdf
+    
+    # Inicia animação de loading
+    loading_dots = 0
+    animar_loading_pdf()
+    
+    try:
+        gerar_relatorio_pdf()
+    except Exception as e:
+        print(f"Erro ao gerar relatório PDF: {e}")
+        if loading_timer_pdf:
+            app.after_cancel(loading_timer_pdf)
+        btn_report_pdf.configure(state='normal', text='Gerar PDF')
         app.update()
 
 # === THREAD UDP ===
@@ -1218,7 +1313,7 @@ COR_CINZA = '#232323'
 COR_TEXTO = '#FFFFFF'
 
 app = ctk.CTk()
-app.title('Riggy - UDP SensaGram (EPUB)')
+app.title('Riggy - UDP SensaGram (EPUB + PDF)')
 app.geometry('900x750')
 app.configure(bg=COR_PRETO)
 
@@ -1262,7 +1357,7 @@ def get_wifi_ssid():
 # Layout principal
 frame_titulo = ctk.CTkFrame(app, fg_color='transparent')
 frame_titulo.pack(fill='x', pady=(10, 0))
-label_titulo = ctk.CTkLabel(frame_titulo, text='Riggy (EPUB)', font=('Segoe UI', 24, 'bold'), text_color=COR_LARANJA)
+label_titulo = ctk.CTkLabel(frame_titulo, text='Riggy', font=('Segoe UI', 24, 'bold'), text_color=COR_LARANJA)
 label_titulo.pack(anchor='center')
 
 local_ip = get_local_ip()
@@ -1627,13 +1722,13 @@ frame_passos.pack(fill='both', expand=True)
 label_passos = ctk.CTkLabel(
     frame_passos,
     text=(
-        'Como usar o Riggy (EPUB):\n'
+        'Como usar o Riggy:\n'
         '1. Selecione a norma técnica ou use "Personalizada".\n'
         '2. Selecione os gráficos desejados à esquerda.\n'
         '3. Para norma personalizada, defina os limites manualmente.\n'
         '4. Clique em Iniciar para começar a receber dados.\n'
         '5. Clique em Encerrar para parar a coleta.\n'
-        '6. Gere o relatório em formato EPUB com vídeo embutido.'
+        '6. Escolha o formato: EPUB (vídeo embutido) ou PDF (vídeo anexado).'
     ),
     font=('Segoe UI', 15),
     justify='left',
@@ -1651,20 +1746,29 @@ btn_encerrar = ctk.CTkButton(
     frame_botoes, text='Encerrar',
     fg_color=COR_LARANJA, hover_color='#FFB266',
     text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
-    width=140, height=40, corner_radius=10,
+    width=120, height=40, corner_radius=10,
     command=lambda: stop_recepcao(),
     state='disabled'
 )
-btn_encerrar.pack(side='left', padx=10)
+btn_encerrar.pack(side='left', padx=5)
 
-btn_report = ctk.CTkButton(
-    frame_botoes, text='Gerar relatório EPUB',
+btn_report_epub = ctk.CTkButton(
+    frame_botoes, text='Gerar EPUB',
     fg_color=COR_LARANJA, hover_color='#FFB266',
     text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
-    width=140, height=40, corner_radius=10,
-    command=gerar_relatorio_com_loading, state='disabled'
+    width=120, height=40, corner_radius=10,
+    command=gerar_relatorio_epub_com_loading, state='disabled'
 )
-btn_report.pack(side='left', padx=10)
+btn_report_epub.pack(side='left', padx=5)
+
+btn_report_pdf = ctk.CTkButton(
+    frame_botoes, text='Gerar PDF',
+    fg_color=COR_LARANJA, hover_color='#FFB266',
+    text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
+    width=120, height=40, corner_radius=10,
+    command=gerar_relatorio_pdf_com_loading, state='disabled'
+)
+btn_report_pdf.pack(side='left', padx=5)
 
 def atualizar_lado_direito(estado):
     if estado == 'passos':
@@ -1674,12 +1778,14 @@ def atualizar_lado_direito(estado):
         frame_passos.pack_forget()
         frame_graficos.pack(fill='both', expand=True)
         btn_encerrar.configure(state='normal')
-        btn_report.configure(state='disabled')
+        btn_report_epub.configure(state='disabled')
+        btn_report_pdf.configure(state='disabled')
     elif estado == 'encerrado':
         frame_passos.pack_forget()
         frame_graficos.pack(fill='both', expand=True)
         btn_encerrar.configure(state='disabled')
-        btn_report.configure(state='normal')
+        btn_report_epub.configure(state='normal')
+        btn_report_pdf.configure(state='normal')
 
 atualizar_lado_direito('passos')
 
