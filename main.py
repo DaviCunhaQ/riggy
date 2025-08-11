@@ -14,54 +14,57 @@ import statistics
 import subprocess
 import cv2
 import numpy as np
+from ebooklib import epub
+from jinja2 import Template
+import base64
 import fitz  # PyMuPDF
 
 # === CONFIGURAÇÕES ===
 PORTA_UDP = 5000
-TIMEOUT = 0.01  # Reduzido para melhor resposta de rede
+TIMEOUT = 0.01
 LP_ALPHA = 0.9
 WINDOW_SIZE = 20
-TARGET_FPS = 15  # FPS reduzido para velocidade correta
-FRAME_INTERVAL = 1.0 / TARGET_FPS  # Intervalo entre frames
-BUFFER_SIZE = 2048  # Buffer maior para melhor performance de rede
+TARGET_FPS = 15
+FRAME_INTERVAL = 1.0 / TARGET_FPS
+BUFFER_SIZE = 2048
 gravacao_inicio = None
 gravacao_fim = None
 
 # === NORMAS TÉCNICAS BRASILEIRAS ===
 estruturas_normas = {
     'Concreto Armado (NBR 6118)': {
-        'tilt': 1.0,  # graus
-        'vib': 0.7,   # m/s²
+        'tilt': 1.0,
+        'vib': 0.7,
         'norma': 'NBR 6118',
         'descricao': 'Estruturas de concreto armado - Procedimento'
     },
     'Estruturas de Aço (NBR 8800)': {
-        'tilt': 1.5,  # graus
-        'vib': 0.5,   # m/s²
+        'tilt': 1.5,
+        'vib': 0.5,
         'norma': 'NBR 8800',
         'descricao': 'Projeto de estruturas de aço e de estruturas mistas de aço e concreto'
     },
     'Estruturas Leves (NBR 15370)': {
-        'tilt': 2.0,  # graus
-        'vib': 0.3,   # m/s²
+        'tilt': 2.0,
+        'vib': 0.3,
         'norma': 'NBR 15370',
         'descricao': 'Estruturas de madeira - Métodos de ensaio'
     },
     'Pontes e Viadutos (NBR 7188)': {
-        'tilt': 0.8,  # graus
-        'vib': 0.4,   # m/s²
+        'tilt': 0.8,
+        'vib': 0.4,
         'norma': 'NBR 7188',
         'descricao': 'Carga móvel rodoviária e de pedestres em pontes'
     },
     'Estruturas Pré-moldadas (NBR 9062)': {
-        'tilt': 1.2,  # graus
-        'vib': 0.6,   # m/s²
+        'tilt': 1.2,
+        'vib': 0.6,
         'norma': 'NBR 9062',
         'descricao': 'Projeto e execução de estruturas de concreto pré-moldado'
     },
     'Personalizada': {
-        'tilt': 80.0,  # valor padrão
-        'vib': 1.5,    # valor padrão em g (será convertido)
+        'tilt': 80.0,
+        'vib': 1.5,
         'norma': 'Limites Personalizados',
         'descricao': 'Limites definidos pelo usuário'
     }
@@ -71,7 +74,7 @@ estruturas_normas = {
 TILT_THRESHOLD = 80.0
 VIB_THRESHOLD = 1.5
 ESTRUTURA_ATUAL = 'Personalizada'
-UNIDADE_VIB_ATUAL = 'g'  # 'g' ou 'm/s²'
+UNIDADE_VIB_ATUAL = 'g'
 
 # === ÁUDIO ===
 pygame.mixer.init()
@@ -87,38 +90,31 @@ recording = False
 video_writer = None
 video_filename = None
 frames_buffer = []
-last_frame_time = 0  # Controle de tempo para frames
+last_frame_time = 0
 
-# Threads separadas para melhor performance
 data_thread = None
 graph_thread = None
 video_thread = None
 
-# Queues para comunicação entre threads
 import queue
 data_queue = queue.Queue()
 graph_queue = queue.Queue()
 
-# Cache para gráficos - evita recálculos desnecessários
 graph_cache = {}
 last_update_time = 0
-UPDATE_INTERVAL = 0.1  # Atualiza gráficos a cada 100ms
+UPDATE_INTERVAL = 0.1
 
-# Métricas de performance
 performance_stats = {
     'frames_capturados': 0,
     'tempo_ultima_atualizacao': 0,
     'fps_real': 0
 }
 
-# Variáveis para loading
 loading_dots = 0
-loading_timer = None
+loading_timer_epub = None
+loading_timer_pdf = None
 
-# Configuração para reduzir ghosting
-INTERPOLACAO_HABILITADA = False  # Desabilita interpolação para evitar ghosting
-
-# Novo estado para saber se está encerrado
+INTERPOLACAO_HABILITADA = False
 encerrado = False
 
 tempo = []
@@ -148,7 +144,7 @@ def obter_limite_vib_convertido():
     global VIB_THRESHOLD, UNIDADE_VIB_ATUAL
     if UNIDADE_VIB_ATUAL == 'm/s²':
         return VIB_THRESHOLD
-    else:  # 'g'
+    else:
         return VIB_THRESHOLD
 
 def converter_vibracao_para_unidade_norma(vib_g):
@@ -168,7 +164,7 @@ def iniciar_gravacao():
     video_filename = f"gravacao_graficos_{now}.mp4"
     recording = True
     frames_buffer = []
-    gravacao_inicio = datetime.now()  # marca o tempo de início
+    gravacao_inicio = datetime.now()
     print(f"Iniciando gravação: {video_filename}")
 
 def finalizar_gravacao():
@@ -176,25 +172,21 @@ def finalizar_gravacao():
     if not recording:
         return
     recording = False
-    gravacao_fim = datetime.now()  # marca o tempo de fim
+    gravacao_fim = datetime.now()
 
     if len(frames_buffer) == 0:
         print("Nenhum frame capturado para gravação")
         return
     try:
-        # Usa FPS real para velocidade correta
         height, width, channels = frames_buffer[0].shape
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         
-        # Calcula FPS real baseado nos frames capturados
         duracao_segundos = (gravacao_fim - gravacao_inicio).total_seconds()
         fps_real = len(frames_buffer) / duracao_segundos if duracao_segundos > 0 else TARGET_FPS
         
-        # Usa FPS real para velocidade correta
         fps_video = fps_real
         video_writer = cv2.VideoWriter(video_filename, fourcc, fps_video, (width, height))
         
-        # Usa frames reais com FPS real para velocidade correta
         if len(frames_buffer) > 1:
             print(f"Usando frames reais: {len(frames_buffer)} frames")
             print(f"FPS real calculado: {fps_video:.2f}")
@@ -204,7 +196,7 @@ def finalizar_gravacao():
             video_writer.write(frame)
         video_writer.release()
         video_writer = None
-        # Calcula FPS real
+        
         duracao_real = (gravacao_fim - gravacao_inicio).total_seconds()
         fps_real = len(frames_buffer) / duracao_real if duracao_real > 0 else 0
         performance_stats['fps_real'] = fps_real
@@ -227,72 +219,623 @@ def capturar_frame_grafico():
     if not recording:
         return
     
-    # Controle de FPS - só captura se passou tempo suficiente
     current_time = time.time()
     if current_time - last_frame_time < FRAME_INTERVAL:
         return
     
     last_frame_time = current_time
     
-    # Atualiza métricas de performance
     performance_stats['frames_capturados'] += 1
     performance_stats['tempo_ultima_atualizacao'] = current_time
     
     try:
-        # Otimização: Reduz qualidade para melhor performance
         canvas.draw()
         canvas.flush_events()
         
-        # Método atualizado para versões mais recentes do matplotlib
         buf = canvas.buffer_rgba()
         buf = np.asarray(buf)
         buf = buf.reshape(canvas.get_width_height()[::-1] + (4,))
         
-        # Remove o canal alpha (RGBA -> RGB)
         frame_rgb = buf[:, :, :3]
-        
-        # Converte RGB para BGR (formato do OpenCV)
         frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        
-        # Redimensiona para tamanho otimizado (menor = mais rápido)
-        frame = cv2.resize(frame, (640, 480))  # Reduzido de 800x600
-        
-        # Compressão para melhor performance
+        frame = cv2.resize(frame, (640, 480))
         frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_LINEAR)
         
-        # Adiciona ao buffer
         frames_buffer.append(frame.copy())
         
-        # Limita o buffer para evitar uso excessivo de memória
         if len(frames_buffer) > 1000:
             frames_buffer.pop(0)
             
     except Exception as e:
         print(f"Erro ao capturar frame: {e}")
-        # Fallback para versões mais antigas do matplotlib
         try:
             buf = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
             buf = buf.reshape(canvas.get_width_height()[::-1] + (3,))
             frame = cv2.cvtColor(buf, cv2.COLOR_RGB2BGR)
-            frame = cv2.resize(frame, (640, 480))  # Reduzido
+            frame = cv2.resize(frame, (640, 480))
             frames_buffer.append(frame.copy())
-            if len(frames_buffer) > 500:  # Reduzido
+            if len(frames_buffer) > 500:
                 frames_buffer.pop(0)
         except Exception as e2:
             print(f"Erro no fallback: {e2}")
 
-# === RELATÓRIO COM VÍDEO ANEXADO USANDO PyMuPDF ===
-def gerar_relatorio():
+# === TEMPLATE HTML PARA EPUB ===
+EPUB_TEMPLATE = """
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>{{ titulo }}</title>
+    <meta charset="utf-8"/>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 20px;
+            color: #333;
+        }
+        .header {
+            text-align: center;
+            border-bottom: 3px solid #FF8800;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .logo {
+            color: #FF8800;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            border-left: 4px solid #FF8800;
+            background-color: #f9f9f9;
+        }
+        .section-title {
+            color: #FF8800;
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .norma-section {
+            background-color: #f0f0ff;
+            border: 2px solid #0066cc;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 15px 0;
+        }
+        .stat-item {
+            margin: 5px 0;
+        }
+        .status-conforme {
+            color: #008000;
+            font-weight: bold;
+        }
+        .status-nao-conforme {
+            color: #cc0000;
+            font-weight: bold;
+        }
+        .video-section {
+            background-color: #1a1a1a;
+            color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .video-container {
+            margin: 20px 0;
+            background-color: #000;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        video {
+            max-width: 100%;
+            height: auto;
+            border-radius: 5px;
+            background-color: #000;
+        }
+        .video-fallback {
+            background-color: #333;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .video-fallback a {
+            color: #FF8800;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .video-fallback a:hover {
+            text-decoration: underline;
+        }
+        .footer {
+            border-top: 1px solid #FF8800;
+            padding-top: 15px;
+            margin-top: 30px;
+            font-size: 12px;
+            color: #666;
+        }
+        .chart-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .chart-container img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .video-info {
+            font-size: 12px;
+            color: #ccc;
+            margin: 10px 0;
+        }
+        .compatibility-note {
+            background-color: #2a2a2a;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            font-size: 12px;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">RELATÓRIO RIGGY</div>
+        <div class="subtitle">UDP SensaGram - Monitoramento de Sensores</div>
+    </div>
+
+    <div class="norma-section">
+        <div class="section-title">📋 NORMA TÉCNICA APLICADA</div>
+        <p><strong>Estrutura Avaliada:</strong> {{ estrutura_atual }}</p>
+        <p><strong>Norma Aplicada:</strong> {{ norma_info.norma }}</p>
+        <p><strong>Descrição:</strong> {{ norma_info.descricao }}</p>
+        <p><strong>Limites:</strong> Inclinação ≤ {{ limite_tilt }}° | Vibração ≤ {{ limite_vib }} {{ unidade_display }}</p>
+    </div>
+
+    <div class="section">
+        <div class="section-title">INFORMAÇÕES GERAIS</div>
+        <div class="stats-grid">
+            <div>
+                <div class="stat-item"><strong>Data e Hora:</strong> {{ data_hora }}</div>
+                <div class="stat-item"><strong>Pontos Coletados:</strong> {{ pontos_coletados }}</div>
+                <div class="stat-item"><strong>Duração do Teste:</strong> {{ duracao_teste }} segundos</div>
+            </div>
+            <div>
+                <div class="stat-item"><strong>Alertas de Inclinação:</strong> {{ alertas_tilt }}</div>
+                <div class="stat-item"><strong>Alertas de Vibração:</strong> {{ alertas_vib }}</div>
+            </div>
+        </div>
+    </div>
+
+    {% if mostrar_tilt %}
+    <div class="section">
+        <div class="section-title">📐 ESTATÍSTICAS DE INCLINAÇÃO (°)</div>
+        <div class="stats-grid">
+            <div>
+                <div class="stat-item"><strong>Média:</strong> {{ tilt_media }}°</div>
+                <div class="stat-item"><strong>Máximo:</strong> {{ tilt_max }}°</div>
+                <div class="stat-item"><strong>Mínimo:</strong> {{ tilt_min }}°</div>
+            </div>
+            <div>
+                <div class="stat-item"><strong>Desvio Padrão:</strong> {{ tilt_std }}°</div>
+                <div class="stat-item"><strong>Limite da Norma:</strong> {{ limite_tilt }}°</div>
+                <div class="stat-item"><strong>Status:</strong> 
+                    <span class="{{ 'status-conforme' if tilt_status == 'CONFORME' else 'status-nao-conforme' }}">
+                        {{ tilt_status }}
+                    </span>
+                </div>
+                <div class="stat-item"><strong>Avaliação:</strong> {{ tilt_avaliacao }}</div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if mostrar_vib %}
+    <div class="section">
+        <div class="section-title">📳 ESTATÍSTICAS DE VIBRAÇÃO ({{ unidade_display }})</div>
+        <div class="stats-grid">
+            <div>
+                <div class="stat-item"><strong>Média:</strong> {{ vib_media }}{{ unidade_display }}</div>
+                <div class="stat-item"><strong>Máximo:</strong> {{ vib_max }}{{ unidade_display }}</div>
+                <div class="stat-item"><strong>Mínimo:</strong> {{ vib_min }}{{ unidade_display }}</div>
+            </div>
+            <div>
+                <div class="stat-item"><strong>Desvio Padrão:</strong> {{ vib_std }}{{ unidade_display }}</div>
+                <div class="stat-item"><strong>Limite da Norma:</strong> {{ limite_vib }}{{ unidade_display }}</div>
+                <div class="stat-item"><strong>Status:</strong> 
+                    <span class="{{ 'status-conforme' if vib_status == 'CONFORME' else 'status-nao-conforme' }}">
+                        {{ vib_status }}
+                    </span>
+                </div>
+                <div class="stat-item"><strong>Avaliação:</strong> {{ vib_avaliacao }}</div>
+            </div>
+        </div>
+        {% if unidade_display == 'm/s²' %}
+        <p style="font-size: 12px; color: #666; margin-top: 10px;">
+            * Valores convertidos de g para m/s² conforme NBR ISO 2631-1
+        </p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if graficos %}
+    <div class="section">
+        <div class="section-title">📊 GRÁFICOS COMPLETOS POR TEMPO</div>
+        {% for grafico in graficos %}
+        <div class="chart-container">
+            <img src="{{ grafico.src }}" alt="{{ grafico.alt }}" />
+            <p>{{ grafico.titulo }}</p>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if video_data %}
+    <div class="video-section">
+        <div class="section-title" style="color: #FF8800;">🎥 GRAVAÇÃO DOS GRÁFICOS</div>
+        <p><strong>Arquivo:</strong> {{ video_filename }}</p>
+        <p><strong>Frames Capturados:</strong> {{ frames_capturados }}</p>
+        <p><strong>Duração:</strong> {{ duracao_video }} segundos</p>
+        <p><strong>Tamanho:</strong> {{ video_size_mb }} MB</p>
+        
+        <div class="video-container">
+            {% if video_base64 %}
+            <!-- Vídeo embutido como base64 -->
+            <video controls preload="metadata" style="width: 100%; max-width: 640px;">
+                <source src="data:video/mp4;base64,{{ video_base64 }}" type="video/mp4">
+                <p style="color: #ff6666;">Seu leitor de EPUB não suporta vídeos HTML5.</p>
+            </video>
+            <div class="video-info">
+                ✅ Vídeo embutido diretamente no EPUB (base64)
+            </div>
+            {% else %}
+            <!-- Vídeo como arquivo anexo -->
+            <video controls preload="metadata" style="width: 100%; max-width: 640px;">
+                <source src="{{ video_src }}" type="video/mp4">
+                <div class="video-fallback">
+                    <p style="color: #ff6666;">❌ Não foi possível carregar o vídeo</p>
+                    <p>O vídeo está anexado ao EPUB como arquivo separado.</p>
+                    <p>Tente extrair o arquivo "{{ video_filename }}" do EPUB.</p>
+                </div>
+            </video>
+            <div class="video-info">
+                📎 Vídeo anexado como arquivo separado
+            </div>
+            {% endif %}
+        </div>
+        
+        <div class="compatibility-note">
+            <strong>💡 Dica de Compatibilidade:</strong><br>
+            • <strong>Calibre:</strong> Suporta vídeos HTML5 ✅<br>
+            • <strong>Adobe Digital Editions:</strong> Suporte limitado ⚠️<br>
+            • <strong>Apple Books:</strong> Suporta vídeos ✅<br>
+            • <strong>Google Play Books:</strong> Suporte limitado ⚠️<br>
+            <br>
+            Se o vídeo não reproduzir, o arquivo original está salvo em: <strong>{{ video_filename }}</strong>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="footer">
+        <p><strong>Gerado por Riggy - UDP SensaGram</strong></p>
+        <p>Relatório gerado em {{ data_hora }}</p>
+    </div>
+</body>
+</html>
+"""
+
+# === GERAÇÃO DE RELATÓRIO EPUB ===
+def gerar_relatorio_epub():
     global video_filename, gravacao_inicio, gravacao_fim, ESTRUTURA_ATUAL, UNIDADE_VIB_ATUAL
     
     # Desabilita o botão e mostra loading
-    btn_report.configure(state='disabled', text='Gerando relatório...')
-    app.update()  # Força atualização da interface
+    btn_report_epub.configure(state='disabled', text='Gerando EPUB...')
+    app.update()
 
     finalizar_gravacao()
 
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_filename = f"relatorio_{now}.pdf"
+    epub_filename = f"relatorio_epub_{now}.epub"
+
+    # Calcula estatísticas (mantém o código existente)
+    tilt_list = [v for v in tilts_all if not math.isnan(v)] if grafico_tilt_var.get() else []
+    vib_list = [v for v in vibracoes_all if not math.isnan(v)] if grafico_vib_var.get() else []
+    
+    tilt_media = sum(tilt_list) / len(tilt_list) if tilt_list else 0
+    vib_media = sum(vib_list) / len(vib_list) if vib_list else 0
+    tilt_max = max(tilt_list) if tilt_list else 0
+    tilt_min = min(tilt_list) if tilt_list else 0
+    vib_max = max(vib_list) if vib_list else 0
+    vib_min = min(vib_list) if vib_list else 0
+    tilt_std = statistics.stdev(tilt_list) if len(tilt_list) > 1 else 0
+    vib_std = statistics.stdev(vib_list) if len(vib_list) > 1 else 0
+
+    # Converte estatísticas de vibração para a unidade da norma se necessário
+    if UNIDADE_VIB_ATUAL == 'm/s²':
+        vib_media_norma = g_para_ms2(vib_media)
+        vib_max_norma = g_para_ms2(vib_max)
+        vib_min_norma = g_para_ms2(vib_min)
+        vib_std_norma = g_para_ms2(vib_std)
+        unidade_display = 'm/s²'
+    else:
+        vib_media_norma = vib_media
+        vib_max_norma = vib_max
+        vib_min_norma = vib_min
+        vib_std_norma = vib_std
+        unidade_display = 'g'
+
+    duracao_real = (gravacao_fim - gravacao_inicio).total_seconds() if gravacao_inicio and gravacao_fim else len(frames_buffer)/10
+
+    # Prepara dados para o template
+    norma_info = estruturas_normas.get(ESTRUTURA_ATUAL, estruturas_normas['Personalizada'])
+    
+    # Status de conformidade
+    tilt_status = "CONFORME" if tilt_max < TILT_THRESHOLD else "NÃO CONFORME"
+    vib_max_comparacao = vib_max if UNIDADE_VIB_ATUAL == 'g' else g_para_ms2(vib_max)
+    vib_status = "CONFORME" if vib_max_comparacao < VIB_THRESHOLD else "NÃO CONFORME"
+    
+    # Avaliações técnicas
+    if tilt_max < TILT_THRESHOLD * 0.5:
+        tilt_avaliacao = "EXCELENTE"
+    elif tilt_max < TILT_THRESHOLD * 0.8:
+        tilt_avaliacao = "BOM"
+    elif tilt_max < TILT_THRESHOLD:
+        tilt_avaliacao = "ACEITÁVEL"
+    else:
+        tilt_avaliacao = "CRÍTICO"
+    
+    if vib_max_comparacao < VIB_THRESHOLD * 0.5:
+        vib_avaliacao = "EXCELENTE"
+    elif vib_max_comparacao < VIB_THRESHOLD * 0.8:
+        vib_avaliacao = "BOM"
+    elif vib_max_comparacao < VIB_THRESHOLD:
+        vib_avaliacao = "ACEITÁVEL"
+    else:
+        vib_avaliacao = "CRÍTICO"
+
+    # Gera gráficos para o EPUB
+    graficos_info = []
+    graficos_paths = salvar_graficos_completos_para_epub(tilts_all, vibracoes_all, grafico_tilt_var.get(), grafico_vib_var.get())
+    
+    for i, path in enumerate(graficos_paths):
+        if 'tilt' in path:
+            graficos_info.append({
+                'src': f'images/grafico_tilt_{i}.png',
+                'alt': 'Gráfico de Inclinação por Tempo',
+                'titulo': 'Inclinação (°) por Tempo',
+                'path': path
+            })
+        else:
+            graficos_info.append({
+                'src': f'images/grafico_vib_{i}.png',
+                'alt': 'Gráfico de Vibração por Tempo',
+                'titulo': f'Vibração ({unidade_display}) por Tempo',
+                'path': path
+            })
+
+    # === LÓGICA PARA VÍDEO ===
+    video_base64 = None
+    video_size_mb = 0
+    if video_filename and os.path.isfile(video_filename):
+        try:
+            # Converte vídeo para H.264 (mais compatível)
+            video_h264_filename = f"video_h264_{now}.mp4"
+            converter_video_para_h264(video_filename, video_h264_filename)
+            
+            # Lê o vídeo convertido
+            with open(video_h264_filename, 'rb') as video_file:
+                video_data = video_file.read()
+                video_size_mb = len(video_data) / (1024 * 1024)  # Tamanho em MB
+                
+                # Se o vídeo for menor que 10MB, converte para base64
+                if video_size_mb < 10:
+                    video_base64 = base64.b64encode(video_data).decode('utf-8')
+                    print(f"✅ Vídeo convertido para base64: {video_size_mb:.2f} MB")
+                else:
+                    print(f"⚠️ Vídeo muito grande ({video_size_mb:.2f} MB), será anexado como arquivo")
+            
+            # Remove o arquivo temporário H.264
+            if os.path.exists(video_h264_filename):
+                os.remove(video_h264_filename)
+                
+        except Exception as e:
+            print(f"Erro ao processar vídeo: {e}")
+            # Fallback: usa o vídeo original
+            try:
+                with open(video_filename, 'rb') as video_file:
+                    video_data = video_file.read()
+                    video_size_mb = len(video_data) / (1024 * 1024)
+            except:
+                video_data = None
+
+    # Dados do template
+    template_data = {
+        'titulo': 'Relatório Riggy - UDP SensaGram',
+        'estrutura_atual': ESTRUTURA_ATUAL,
+        'norma_info': norma_info,
+        'limite_tilt': f"{TILT_THRESHOLD:.1f}",
+        'limite_vib': f"{VIB_THRESHOLD:.2f}",
+        'unidade_display': unidade_display,
+        'data_hora': datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        'pontos_coletados': len(tempo),
+        'duracao_teste': f"{duracao_real:.1f}",
+        'alertas_tilt': sum(1 for a in alerts if a[0]=='tilt') if grafico_tilt_var.get() else 0,
+        'alertas_vib': sum(1 for a in alerts if a[0]=='vibração') if grafico_vib_var.get() else 0,
+        'mostrar_tilt': grafico_tilt_var.get(),
+        'mostrar_vib': grafico_vib_var.get(),
+        'tilt_media': f"{tilt_media:.2f}",
+        'tilt_max': f"{tilt_max:.2f}",
+        'tilt_min': f"{tilt_min:.2f}",
+        'tilt_std': f"{tilt_std:.2f}",
+        'tilt_status': tilt_status,
+        'tilt_avaliacao': tilt_avaliacao,
+        'vib_media': f"{vib_media_norma:.3f}",
+        'vib_max': f"{vib_max_norma:.3f}",
+        'vib_min': f"{vib_min_norma:.3f}",
+        'vib_std': f"{vib_std_norma:.3f}",
+        'vib_status': vib_status,
+        'vib_avaliacao': vib_avaliacao,
+        'graficos': graficos_info,
+        'video_data': video_filename and os.path.isfile(video_filename),
+        'video_filename': os.path.basename(video_filename) if video_filename else '',
+        'frames_capturados': len(frames_buffer),
+        'duracao_video': f"{duracao_real:.1f}",
+        'video_src': 'video/gravacao.mp4' if video_filename else '',
+        'video_base64': video_base64,
+        'video_size_mb': f"{video_size_mb:.2f}"
+    }
+
+    # Cria o EPUB
+    try:
+        book = epub.EpubBook()
+        
+        # Metadados
+        book.set_identifier('riggy-report-' + now)
+        book.set_title('Relatório Riggy - UDP SensaGram')
+        book.set_language('pt-BR')
+        book.add_author('Riggy - UDP SensaGram')
+        book.add_metadata('DC', 'description', 'Relatório de monitoramento de sensores estruturais')
+
+        # Renderiza o template HTML
+        template = Template(EPUB_TEMPLATE)
+        html_content = template.render(**template_data)
+        
+        # Cria o capítulo principal
+        chapter = epub.EpubHtml(title='Relatório de Monitoramento', 
+                              file_name='relatorio.xhtml', 
+                              lang='pt-BR')
+        chapter.content = html_content
+        book.add_item(chapter)
+
+        # Adiciona imagens dos gráficos
+        for grafico in graficos_info:
+            if os.path.exists(grafico['path']):
+                with open(grafico['path'], 'rb') as img_file:
+                    img_data = img_file.read()
+                
+                img_item = epub.EpubItem(
+                    uid=f"img_{grafico['src'].split('/')[-1]}",
+                    file_name=grafico['src'],
+                    media_type="image/png",
+                    content=img_data
+                )
+                book.add_item(img_item)
+
+        # Adiciona o vídeo se não foi convertido para base64
+        if video_filename and os.path.isfile(video_filename) and not video_base64:
+            try:
+                with open(video_filename, 'rb') as video_file:
+                    video_data = video_file.read()
+                
+                video_item = epub.EpubItem(
+                    uid="video_gravacao",
+                    file_name="video/gravacao.mp4",
+                    media_type="video/mp4",
+                    content=video_data
+                )
+                book.add_item(video_item)
+                print(f"✅ Vídeo anexado ao EPUB: {len(video_data)} bytes")
+            except Exception as e:
+                print(f"Erro ao anexar vídeo ao EPUB: {e}")
+
+        # Define a ordem de leitura
+        book.toc = [chapter]
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+
+        # Define a spine (ordem dos capítulos)
+        book.spine = ['nav', chapter]
+
+        # Salva o EPUB
+        epub.write_epub(epub_filename, book, {})
+        
+        # Remove arquivos temporários dos gráficos
+        for path in graficos_paths:
+            try:
+                os.remove(path)
+            except Exception as e:
+                print(f"Erro ao remover arquivo temporário {path}: {e}")
+
+        print(f"✅ Relatório EPUB gerado: {epub_filename}")
+        if video_base64:
+            print(f"✅ Vídeo embutido como base64 no HTML")
+        elif video_filename and os.path.isfile(video_filename):
+            print(f"✅ Vídeo anexado como arquivo separado")
+        
+        # Tenta abrir o arquivo
+        try:
+            os.startfile(epub_filename)
+        except:
+            print(f"Arquivo salvo em: {os.path.abspath(epub_filename)}")
+
+    except Exception as e:
+        print(f"Erro ao gerar EPUB: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Para a animação e restaura o botão
+    global loading_timer_epub
+    if loading_timer_epub:
+        app.after_cancel(loading_timer_epub)
+    btn_report_epub.configure(state='normal', text='Gerar EPUB')
+    app.update()
+
+def converter_video_para_h264(input_file, output_file):
+    """Converte vídeo para H.264 usando OpenCV para melhor compatibilidade"""
+    try:
+        cap = cv2.VideoCapture(input_file)
+        
+        # Propriedades do vídeo original
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Codec H.264 (mais compatível)
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264
+        out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
+        
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            out.write(frame)
+            frame_count += 1
+        
+        cap.release()
+        out.release()
+        
+        print(f"✅ Vídeo convertido para H.264: {frame_count} frames")
+        return True
+        
+    except Exception as e:
+        print(f"Erro na conversão H.264: {e}")
+        return False
+
+# === GERAÇÃO DE RELATÓRIO PDF (FUNCIONALIDADE ORIGINAL) ===
+def gerar_relatorio_pdf():
+    global video_filename, gravacao_inicio, gravacao_fim, ESTRUTURA_ATUAL, UNIDADE_VIB_ATUAL
+    
+    # Desabilita o botão e mostra loading
+    btn_report_pdf.configure(state='disabled', text='Gerando PDF...')
+    app.update()
+
+    finalizar_gravacao()
+
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pdf_filename = f"relatorio_pdf_{now}.pdf"
 
     # Estatísticas
     tilt_list = [v for v in tilts_all if not math.isnan(v)] if grafico_tilt_var.get() else []
@@ -332,7 +875,7 @@ def gerar_relatorio():
     cor_azul = (0, 0.4, 0.8)
 
     y_pos = 800
-    desenhou_estatisticas = False  # <- controle do espaço em branco
+    desenhou_estatisticas = False
 
     # Cabeçalho
     logo_path = os.path.join(os.path.dirname(__file__), 'riggy-logo.jpeg')
@@ -348,7 +891,7 @@ def gerar_relatorio():
     page.draw_line(fitz.Point(50, y_pos-70), fitz.Point(545, y_pos-70), color=cor_laranja, width=2)
     y_pos -= 90
 
-    # === NOVA SEÇÃO: INFORMAÇÕES DA NORMA ===
+    # === SEÇÃO: INFORMAÇÕES DA NORMA ===
     norma_info = estruturas_normas.get(ESTRUTURA_ATUAL, estruturas_normas['Personalizada'])
     norma_rect = fitz.Rect(50, y_pos-100, 545, y_pos)
     page.draw_rect(norma_rect, color=(0.95, 0.95, 1.0), fill=(0.95, 0.95, 1.0))
@@ -446,7 +989,7 @@ def gerar_relatorio():
 
     # Se nenhuma estatística foi desenhada, corrige o y_pos
     if not desenhou_estatisticas:
-        y_pos -= 40  # distância abaixo de "Informações Gerais"
+        y_pos -= 40
 
     # Seção de vídeo
     if video_filename and os.path.isfile(video_filename):
@@ -476,7 +1019,7 @@ def gerar_relatorio():
     page.insert_text((50, 45), f"Relatório gerado em {datetime.now():%d/%m/%Y às %H:%M:%S}", fontsize=9, color=cor_cinza)
     page.insert_text((400, 60), f"Página 1 de 1", fontsize=10, color=cor_cinza)
 
-    # --- NOVO: Inserir gráficos completos (por tempo) em nova página ---
+    # Inserir gráficos completos (por tempo) em nova página
     graficos_paths = salvar_graficos_completos_para_pdf(tilts_all, vibracoes_all, grafico_tilt_var.get(), grafico_vib_var.get())
     if graficos_paths:
         page_graficos = doc.new_page(width=595, height=842)
@@ -493,7 +1036,6 @@ def gerar_relatorio():
                 y_graf -= (img_height + 20)
             except Exception as e:
                 print(f"Erro ao inserir gráfico no PDF: {e}")
-    # --- FIM NOVO ---
 
     doc.save(pdf_filename)
     doc.close()
@@ -510,43 +1052,165 @@ def gerar_relatorio():
     except:
         pass
 
-    print(f"Relatório gerado: {pdf_filename}")
+    print(f"Relatório PDF gerado: {pdf_filename}")
     if video_filename and os.path.isfile(video_filename):
-        print(f"Vídeo salvo: {video_filename}")
+        print(f"Vídeo anexado ao PDF: {video_filename}")
     
     # Para a animação e restaura o botão
-    global loading_timer
-    if loading_timer:
-        app.after_cancel(loading_timer)
-    btn_report.configure(state='normal', text='Gerar relatório')
-    app.update()  # Força atualização da interface
+    global loading_timer_pdf
+    if loading_timer_pdf:
+        app.after_cancel(loading_timer_pdf)
+    btn_report_pdf.configure(state='normal', text='Gerar PDF')
+    app.update()
 
-def animar_loading():
-    """Anima o texto de loading com pontos"""
-    global loading_dots, loading_timer
+def salvar_graficos_completos_para_epub(tilts_all, vibracoes_all, show_tilt, show_vib):
+    """Salva gráficos como imagens PNG para o EPUB"""
+    global UNIDADE_VIB_ATUAL
+    paths = []
+    
+    if show_tilt and tilts_all:
+        fig_tilt, ax_tilt = plt.subplots(figsize=(8, 4))
+        ax_tilt.plot(list(range(len(tilts_all))), tilts_all, color='#FF8800', linewidth=2)
+        ax_tilt.set_ylim(0, 100)
+        ax_tilt.set_title('Inclinação (°) por tempo', fontsize=14, fontweight='bold')
+        ax_tilt.set_ylabel('Grau')
+        ax_tilt.set_xlabel('Tempo (amostras)')
+        ax_tilt.grid(True, alpha=0.3)
+        fig_tilt.tight_layout()
+        tilt_path = f"tilt_grafico_epub_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        fig_tilt.savefig(tilt_path, dpi=150, bbox_inches='tight')
+        plt.close(fig_tilt)
+        paths.append(tilt_path)
+    
+    if show_vib and vibracoes_all:
+        fig_vib, ax_vib = plt.subplots(figsize=(8, 4))
+        
+        # Converte dados para a unidade correta se necessário
+        vib_data = vibracoes_all
+        unidade_display = 'g'
+        if UNIDADE_VIB_ATUAL == 'm/s²':
+            vib_data = [g_para_ms2(v) for v in vibracoes_all]
+            unidade_display = 'm/s²'
+            
+        ax_vib.plot(list(range(len(vib_data))), vib_data, color='#FFB266', linewidth=2)
+        
+        # Ajusta escala baseada na unidade
+        if UNIDADE_VIB_ATUAL == 'm/s²':
+            ax_vib.set_ylim(0, 50)
+        else:
+            ax_vib.set_ylim(0, 5)
+            
+        ax_vib.set_title(f'Vibração ({unidade_display}) por tempo', fontsize=14, fontweight='bold')
+        ax_vib.set_ylabel(unidade_display)
+        ax_vib.set_xlabel('Tempo (amostras)')
+        ax_vib.grid(True, alpha=0.3)
+        fig_vib.tight_layout()
+        vib_path = f"vib_grafico_epub_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        fig_vib.savefig(vib_path, dpi=150, bbox_inches='tight')
+        plt.close(fig_vib)
+        paths.append(vib_path)
+    
+    return paths
+
+def salvar_graficos_completos_para_pdf(tilts_all, vibracoes_all, show_tilt, show_vib):
+    """Salva gráficos como imagens PNG para o PDF"""
+    global UNIDADE_VIB_ATUAL
+    paths = []
+    
+    if show_tilt and tilts_all:
+        fig_tilt, ax_tilt = plt.subplots(figsize=(6, 3))
+        ax_tilt.plot(list(range(len(tilts_all))), tilts_all, color='#FF8800', linewidth=2)
+        ax_tilt.set_ylim(0, 100)
+        ax_tilt.set_title('Inclinação (°) por tempo', fontsize=12, fontweight='bold')
+        ax_tilt.set_ylabel('Grau')
+        ax_tilt.set_xlabel('Tempo (amostras)')
+        fig_tilt.tight_layout()
+        tilt_path = f"tilt_grafico_pdf_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        fig_tilt.savefig(tilt_path)
+        plt.close(fig_tilt)
+        paths.append(tilt_path)
+    
+    if show_vib and vibracoes_all:
+        fig_vib, ax_vib = plt.subplots(figsize=(6, 3))
+        
+        # Converte dados para a unidade correta se necessário
+        vib_data = vibracoes_all
+        unidade_display = 'g'
+        if UNIDADE_VIB_ATUAL == 'm/s²':
+            vib_data = [g_para_ms2(v) for v in vibracoes_all]
+            unidade_display = 'm/s²'
+            
+        ax_vib.plot(list(range(len(vib_data))), vib_data, color='#FFB266', linewidth=2)
+        
+        # Ajusta escala baseada na unidade
+        if UNIDADE_VIB_ATUAL == 'm/s²':
+            ax_vib.set_ylim(0, 50)
+        else:
+            ax_vib.set_ylim(0, 5)
+            
+        ax_vib.set_title(f'Vibração ({unidade_display}) por tempo', fontsize=12, fontweight='bold')
+        ax_vib.set_ylabel(unidade_display)
+        ax_vib.set_xlabel('Tempo (amostras)')
+        fig_vib.tight_layout()
+        vib_path = f"vib_grafico_pdf_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        fig_vib.savefig(vib_path)
+        plt.close(fig_vib)
+        paths.append(vib_path)
+    
+    return paths
+
+def animar_loading_epub():
+    """Anima o texto de loading com pontos para EPUB"""
+    global loading_dots, loading_timer_epub
     loading_dots = (loading_dots + 1) % 4
     dots = "." * loading_dots
-    btn_report.configure(text=f'Gerando relatório{dots}')
+    btn_report_epub.configure(text=f'Gerando EPUB{dots}')
     
-    if btn_report.cget('state') == 'disabled':
-        loading_timer = app.after(500, animar_loading)
+    if btn_report_epub.cget('state') == 'disabled':
+        loading_timer_epub = app.after(500, animar_loading_epub)
 
-def gerar_relatorio_com_loading():
-    """Wrapper para gerar relatório com tratamento de erro"""
-    global loading_timer
+def animar_loading_pdf():
+    """Anima o texto de loading com pontos para PDF"""
+    global loading_dots, loading_timer_pdf
+    loading_dots = (loading_dots + 1) % 4
+    dots = "." * loading_dots
+    btn_report_pdf.configure(text=f'Gerando PDF{dots}')
+    
+    if btn_report_pdf.cget('state') == 'disabled':
+        loading_timer_pdf = app.after(500, animar_loading_pdf)
+
+def gerar_relatorio_epub_com_loading():
+    """Wrapper para gerar relatório EPUB com tratamento de erro"""
+    global loading_timer_epub
     
     # Inicia animação de loading
     loading_dots = 0
-    animar_loading()
+    animar_loading_epub()
     
     try:
-        gerar_relatorio()
+        gerar_relatorio_epub()
     except Exception as e:
-        print(f"Erro ao gerar relatório: {e}")
-        # Garante que o botão seja restaurado mesmo com erro
-        if loading_timer:
-            app.after_cancel(loading_timer)
-        btn_report.configure(state='normal', text='Gerar relatório')
+        print(f"Erro ao gerar relatório EPUB: {e}")
+        if loading_timer_epub:
+            app.after_cancel(loading_timer_epub)
+        btn_report_epub.configure(state='normal', text='Gerar EPUB')
+        app.update()
+
+def gerar_relatorio_pdf_com_loading():
+    """Wrapper para gerar relatório PDF com tratamento de erro"""
+    global loading_timer_pdf
+    
+    # Inicia animação de loading
+    loading_dots = 0
+    animar_loading_pdf()
+    
+    try:
+        gerar_relatorio_pdf()
+    except Exception as e:
+        print(f"Erro ao gerar relatório PDF: {e}")
+        if loading_timer_pdf:
+            app.after_cancel(loading_timer_pdf)
+        btn_report_pdf.configure(state='normal', text='Gerar PDF')
         app.update()
 
 # === THREAD UDP ===
@@ -557,7 +1221,6 @@ def processar_dados_thread():
     sock.bind(("0.0.0.0", PORTA_UDP))
     sock.settimeout(TIMEOUT)
     
-    # Otimização de rede
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, BUFFER_SIZE)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
@@ -623,7 +1286,6 @@ def processar_dados_thread():
 
         # Alerta de vibração - compara na unidade correta
         if grafico_vib_var.get():
-            # Converte para a unidade de comparação se necessário
             if UNIDADE_VIB_ATUAL == 'm/s²':
                 avg_vib_comparacao = g_para_ms2(avg_vib)
             else:
@@ -647,8 +1309,8 @@ COR_CINZA = '#232323'
 COR_TEXTO = '#FFFFFF'
 
 app = ctk.CTk()
-app.title('Riggy - UDP SensaGram')
-app.geometry('900x750')  # Aumentado para acomodar novos controles
+app.title('Riggy - UDP SensaGram (EPUB + PDF)')
+app.geometry('900x750')
 app.configure(bg=COR_PRETO)
 
 # Define o ícone da janela
@@ -702,14 +1364,14 @@ label_ip.pack(anchor='center', pady=(2, 0))
 frame_principal = ctk.CTkFrame(app, fg_color='transparent')
 frame_principal.pack(fill='both', expand=True, padx=20, pady=10)
 
-frame_esquerdo = ctk.CTkFrame(frame_principal, fg_color=COR_CINZA, corner_radius=16, width=320)  # Aumentado
+frame_esquerdo = ctk.CTkFrame(frame_principal, fg_color=COR_CINZA, corner_radius=16, width=320)
 frame_esquerdo.pack(side='left', fill='y', padx=(0, 20), pady=0)
 frame_esquerdo.pack_propagate(False)
 
 frame_direito = ctk.CTkFrame(frame_principal, fg_color=COR_CINZA, corner_radius=16)
 frame_direito.pack(side='right', fill='both', expand=True, pady=0)
 
-# === NOVA SEÇÃO: SELEÇÃO DE NORMA TÉCNICA ===
+# === SELEÇÃO DE NORMA TÉCNICA ===
 frame_norma = ctk.CTkFrame(frame_esquerdo, fg_color='transparent')
 frame_norma.pack(fill='x', pady=(10, 0), padx=10)
 
@@ -727,7 +1389,6 @@ estrutura_menu = ctk.CTkOptionMenu(
 )
 estrutura_menu.pack(pady=(0, 10))
 
-# Label para mostrar informações da norma selecionada
 label_info_norma = ctk.CTkLabel(frame_norma, text="", font=('Segoe UI', 9), text_color=COR_TEXTO, wraplength=280)
 label_info_norma.pack(pady=(0, 10))
 
@@ -781,7 +1442,6 @@ def suavizar_fft(sinal, freq_corte=10, fs=50):
     y = y - np.mean(y)
     Y = np.fft.fft(y)
     freqs = np.fft.fftfreq(N, d=1/fs)
-    # Zera frequências acima do corte
     Y[np.abs(freqs) > freq_corte] = 0
     y_suave = np.fft.ifft(Y).real + np.mean(sinal)
     return y_suave.tolist()
@@ -789,7 +1449,6 @@ def suavizar_fft(sinal, freq_corte=10, fs=50):
 def update_graph():
     global encerrado, last_update_time, graph_cache, UNIDADE_VIB_ATUAL
     
-    # Controle de frequência de atualização
     current_time = time.time()
     if current_time - last_update_time < UPDATE_INTERVAL:
         if running:
@@ -805,10 +1464,8 @@ def update_graph():
     show_tilt = grafico_tilt_var.get()
     show_vib = grafico_vib_var.get()
 
-    # Determina a unidade de vibração para exibição
     unidade_display = 'm/s²' if UNIDADE_VIB_ATUAL == 'm/s²' else 'g'
 
-    # Se não está rodando e está encerrado, mostrar gráfico por tempo
     if encerrado:
         if show_tilt:
             axs[0].set_visible(True)
@@ -824,16 +1481,14 @@ def update_graph():
             axs[idx].set_visible(True)
             if vibracoes_all:
                 suave = suavizar_fft(vibracoes_all)
-                # Converte para a unidade de exibição se necessário
                 if UNIDADE_VIB_ATUAL == 'm/s²':
                     suave = [g_para_ms2(v) for v in suave]
                 axs[idx].plot(list(range(len(suave))), suave, color='#FFB266', linewidth=2)
             
-            # Ajusta escala baseada na unidade
             if UNIDADE_VIB_ATUAL == 'm/s²':
-                axs[idx].set_ylim(0, 50)  # m/s²
+                axs[idx].set_ylim(0, 50)
             else:
-                axs[idx].set_ylim(0, 5)   # g
+                axs[idx].set_ylim(0, 5)
             
             axs[idx].set_title(f'Vibração ({unidade_display}) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
             axs[idx].set_ylabel(unidade_display, color=COR_TEXTO)
@@ -862,17 +1517,15 @@ def update_graph():
 
         if vibracoes:
             suave = suavizar_fft(list(vibracoes))
-            # Converte para a unidade de exibição se necessário
             if UNIDADE_VIB_ATUAL == 'm/s²':
                 suave = [g_para_ms2(v) for v in suave]
             pts = list(range(len(suave)))
             axs[1].plot(pts, suave, color='#FFB266', linewidth=2)
         
-        # Ajusta escala baseada na unidade
         if UNIDADE_VIB_ATUAL == 'm/s²':
-            axs[1].set_ylim(0, 50)  # m/s²
+            axs[1].set_ylim(0, 50)
         else:
-            axs[1].set_ylim(0, 5)   # g
+            axs[1].set_ylim(0, 5)
             
         axs[1].set_title(f'Vibração ({unidade_display})', color=COR_LARANJA, fontsize=12, fontweight='bold')
         axs[1].set_ylabel(unidade_display, color=COR_TEXTO)
@@ -893,17 +1546,15 @@ def update_graph():
         axs[0].set_visible(True)
         if vibracoes:
             suave = suavizar_fft(list(vibracoes))
-            # Converte para a unidade de exibição se necessário
             if UNIDADE_VIB_ATUAL == 'm/s²':
                 suave = [g_para_ms2(v) for v in suave]
             pts = list(range(len(suave)))
             axs[0].plot(pts, suave, color='#FFB266', linewidth=2)
         
-        # Ajusta escala baseada na unidade
         if UNIDADE_VIB_ATUAL == 'm/s²':
-            axs[0].set_ylim(0, 50)  # m/s²
+            axs[0].set_ylim(0, 50)
         else:
-            axs[0].set_ylim(0, 5)   # g
+            axs[0].set_ylim(0, 5)
             
         axs[0].set_title(f'Vibração ({unidade_display})', color=COR_LARANJA, fontsize=12, fontweight='bold')
         axs[0].set_ylabel(unidade_display, color=COR_TEXTO)
@@ -912,57 +1563,11 @@ def update_graph():
     fig.tight_layout(pad=3.0)
     canvas.draw()
     
-    # Captura frame para gravação
     if recording:
         capturar_frame_grafico()
     
     if running:
-        # Reduz frequência de atualização para melhor performance
-        app.after(100, update_graph)  # 10 FPS para interface
-
-# Função para salvar gráficos completos para PDF
-def salvar_graficos_completos_para_pdf(tilts_all, vibracoes_all, show_tilt, show_vib):
-    global UNIDADE_VIB_ATUAL
-    paths = []
-    if show_tilt and tilts_all:
-        fig_tilt, ax_tilt = plt.subplots(figsize=(6, 3))
-        ax_tilt.plot(list(range(len(tilts_all))), tilts_all, color=COR_LARANJA, linewidth=2)
-        ax_tilt.set_ylim(0, 100)
-        ax_tilt.set_title('Inclinação (°) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
-        ax_tilt.set_ylabel('Grau')
-        ax_tilt.set_xlabel('Tempo (amostras)')
-        fig_tilt.tight_layout()
-        tilt_path = f"tilt_grafico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        fig_tilt.savefig(tilt_path)
-        plt.close(fig_tilt)
-        paths.append(tilt_path)
-    if show_vib and vibracoes_all:
-        fig_vib, ax_vib = plt.subplots(figsize=(6, 3))
-        
-        # Converte dados para a unidade correta se necessário
-        vib_data = vibracoes_all
-        unidade_display = 'g'
-        if UNIDADE_VIB_ATUAL == 'm/s²':
-            vib_data = [g_para_ms2(v) for v in vibracoes_all]
-            unidade_display = 'm/s²'
-            
-        ax_vib.plot(list(range(len(vib_data))), vib_data, color='#FFB266', linewidth=2)
-        
-        # Ajusta escala baseada na unidade
-        if UNIDADE_VIB_ATUAL == 'm/s²':
-            ax_vib.set_ylim(0, 50)  # m/s²
-        else:
-            ax_vib.set_ylim(0, 5)   # g
-            
-        ax_vib.set_title(f'Vibração ({unidade_display}) por tempo', color=COR_LARANJA, fontsize=12, fontweight='bold')
-        ax_vib.set_ylabel(unidade_display)
-        ax_vib.set_xlabel('Tempo (amostras)')
-        fig_vib.tight_layout()
-        vib_path = f"vib_grafico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        fig_vib.savefig(vib_path)
-        plt.close(fig_vib)
-        paths.append(vib_path)
-    return paths
+        app.after(100, update_graph)
 
 grafico_tilt_var.trace_add('write', lambda *a: update_graph())
 grafico_vib_var.trace_add('write', lambda *a: update_graph())
@@ -990,17 +1595,14 @@ def atualizar_limites_por_norma():
     if estrutura in estruturas_normas:
         norma_info = estruturas_normas[estrutura]
         
-        # Atualiza informações da norma
         info_text = f"{norma_info['norma']}\n{norma_info['descricao']}"
         label_info_norma.configure(text=info_text)
         
-        # Define unidade baseada na norma
         if estrutura == 'Personalizada':
-            UNIDADE_VIB_ATUAL = 'g'  # Personalizada usa g
+            UNIDADE_VIB_ATUAL = 'g'
         else:
-            UNIDADE_VIB_ATUAL = 'm/s²'  # Normas técnicas usam m/s²
+            UNIDADE_VIB_ATUAL = 'm/s²'
         
-        # Atualiza os campos de entrada se existirem
         if entry_tilt_limit:
             entry_tilt_limit.delete(0, 'end')
             entry_tilt_limit.insert(0, str(norma_info['tilt']))
@@ -1008,11 +1610,10 @@ def atualizar_limites_por_norma():
         if entry_vib_limit:
             entry_vib_limit.delete(0, 'end')
             if estrutura == 'Personalizada':
-                entry_vib_limit.insert(0, str(norma_info['vib']))  # g
+                entry_vib_limit.insert(0, str(norma_info['vib']))
             else:
-                entry_vib_limit.insert(0, str(norma_info['vib']))  # m/s²
+                entry_vib_limit.insert(0, str(norma_info['vib']))
     
-    # Atualiza os inputs de limites para mostrar a unidade correta
     atualizar_inputs_limites()
     atualizar_estado_iniciar()
 
@@ -1059,7 +1660,6 @@ def atualizar_inputs_limites():
         label_tilt.pack(pady=(0, 2))
         entry_tilt_limit = ctk.CTkEntry(frame_limites, width=100)
         
-        # Define valor baseado na norma
         if estrutura in estruturas_normas:
             valor_inicial = str(estruturas_normas[estrutura]['tilt'])
         else:
@@ -1068,19 +1668,16 @@ def atualizar_inputs_limites():
         entry_tilt_limit.pack(pady=(0, 8))
         entry_tilt_limit.bind('<KeyRelease>', lambda e: atualizar_estado_iniciar())
         
-        # Se não é personalizada, desabilita o campo
         if not eh_personalizada:
             entry_tilt_limit.configure(state='disabled')
     
     if grafico_vib_var.get():
-        # Determina a unidade baseada na norma
         unidade_display = 'g' if eh_personalizada else 'm/s²'
         
         label_vib = ctk.CTkLabel(frame_limites, text=f"Limite de vibração ({unidade_display}):", font=('Segoe UI', 12))
         label_vib.pack(pady=(0, 2))
         entry_vib_limit = ctk.CTkEntry(frame_limites, width=100)
         
-        # Define valor baseado na norma
         if estrutura in estruturas_normas:
             valor_inicial = str(estruturas_normas[estrutura]['vib'])
         else:
@@ -1089,7 +1686,6 @@ def atualizar_inputs_limites():
         entry_vib_limit.pack(pady=(0, 8))
         entry_vib_limit.bind('<KeyRelease>', lambda e: atualizar_estado_iniciar())
         
-        # Se não é personalizada, desabilita o campo
         if not eh_personalizada:
             entry_vib_limit.configure(state='disabled')
     
@@ -1128,7 +1724,7 @@ label_passos = ctk.CTkLabel(
         '3. Para norma personalizada, defina os limites manualmente.\n'
         '4. Clique em Iniciar para começar a receber dados.\n'
         '5. Clique em Encerrar para parar a coleta.\n'
-        '6. Gere o relatório com PDF e vídeo anexado.'
+        '6. Escolha o formato: EPUB (vídeo embutido) ou PDF (vídeo anexado).'
     ),
     font=('Segoe UI', 15),
     justify='left',
@@ -1146,20 +1742,29 @@ btn_encerrar = ctk.CTkButton(
     frame_botoes, text='Encerrar',
     fg_color=COR_LARANJA, hover_color='#FFB266',
     text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
-    width=140, height=40, corner_radius=10,
+    width=120, height=40, corner_radius=10,
     command=lambda: stop_recepcao(),
     state='disabled'
 )
-btn_encerrar.pack(side='left', padx=10)
+btn_encerrar.pack(side='left', padx=5)
 
-btn_report = ctk.CTkButton(
-    frame_botoes, text='Gerar relatório',
+btn_report_epub = ctk.CTkButton(
+    frame_botoes, text='Gerar EPUB',
     fg_color=COR_LARANJA, hover_color='#FFB266',
     text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
-    width=140, height=40, corner_radius=10,
-    command=gerar_relatorio_com_loading, state='disabled'
+    width=120, height=40, corner_radius=10,
+    command=gerar_relatorio_epub_com_loading, state='disabled'
 )
-btn_report.pack(side='left', padx=10)
+btn_report_epub.pack(side='left', padx=5)
+
+btn_report_pdf = ctk.CTkButton(
+    frame_botoes, text='Gerar PDF',
+    fg_color=COR_LARANJA, hover_color='#FFB266',
+    text_color=COR_PRETO, font=('Segoe UI', 14, 'bold'),
+    width=120, height=40, corner_radius=10,
+    command=gerar_relatorio_pdf_com_loading, state='disabled'
+)
+btn_report_pdf.pack(side='left', padx=5)
 
 def atualizar_lado_direito(estado):
     if estado == 'passos':
@@ -1169,12 +1774,14 @@ def atualizar_lado_direito(estado):
         frame_passos.pack_forget()
         frame_graficos.pack(fill='both', expand=True)
         btn_encerrar.configure(state='normal')
-        btn_report.configure(state='disabled')
+        btn_report_epub.configure(state='disabled')
+        btn_report_pdf.configure(state='disabled')
     elif estado == 'encerrado':
         frame_passos.pack_forget()
         frame_graficos.pack(fill='both', expand=True)
         btn_encerrar.configure(state='disabled')
-        btn_report.configure(state='normal')
+        btn_report_epub.configure(state='normal')
+        btn_report_pdf.configure(state='normal')
 
 atualizar_lado_direito('passos')
 
@@ -1182,10 +1789,8 @@ def start_recepcao():
     global running, data_thread, TILT_THRESHOLD, VIB_THRESHOLD, encerrado
     reset_dados()
     
-    # Inicia a gravação de vídeo
     iniciar_gravacao()
     
-    # Atualiza limites baseados nos valores dos campos de entrada
     try:
         if grafico_tilt_var.get() and entry_tilt_limit:
             TILT_THRESHOLD = float(entry_tilt_limit.get())
@@ -1203,7 +1808,6 @@ def start_recepcao():
     btn_start.configure(state='disabled')
     atualizar_lado_direito('graficos')
     
-    # Usa a nova thread otimizada
     data_thread = threading.Thread(target=processar_dados_thread, daemon=True)
     data_thread.start()
     update_graph()
@@ -1230,4 +1834,5 @@ def stop_recepcao():
     atualizar_lado_direito('encerrado')
     update_graph()
 
-app.mainloop()
+if __name__ == "__main__":
+    app.mainloop()
