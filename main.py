@@ -18,6 +18,20 @@ from ebooklib import epub
 from jinja2 import Template
 import base64
 import fitz  # PyMuPDF
+import sys
+
+def resource_path(relative_path):
+    try:
+        # Quando rodando no executável
+        base_path = sys._MEIPASS
+    except Exception:
+        # Quando rodando no script normal
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+def fechar_janela():
+    app.destroy()
+    sys.exit(0)
 
 # === CONFIGURAÇÕES ===
 PORTA_UDP = 5000
@@ -1313,6 +1327,13 @@ app.title('Riggy - UDP SensaGram (EPUB + PDF)')
 app.geometry('900x750')
 app.configure(bg=COR_PRETO)
 
+ico_path = resource_path('riggy-logo.ico')
+if os.path.isfile(ico_path):
+    try:
+        app.iconbitmap(ico_path)
+    except Exception as e:
+        print(f"Erro ao carregar ícone: {e}")
+
 # Define o ícone da janela
 ico_path = os.path.join(os.path.dirname(__file__), 'riggy-logo.ico')
 if os.path.isfile(ico_path):
@@ -1320,6 +1341,8 @@ if os.path.isfile(ico_path):
         app.iconbitmap(ico_path)
     except Exception:
         pass
+
+app.protocol("WM_DELETE_WINDOW", fechar_janela)
 
 # Função para obter o IP local
 def get_local_ip():
